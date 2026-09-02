@@ -63,7 +63,19 @@ targets:
       base:
         PRODUCT_NAME: aipicam
         PRODUCT_BUNDLE_IDENTIFIER: com.jacohanekom.aipicam
-        SWIFT_VERSION: "6.0"
+        # Swift 5 language mode, not 6 -- same reason
+        # pi-bluetooth-configuration-client-mac's Package.swift pins
+        # .swiftLanguageMode(.v5): CBUUID (and [CBUUID]) isn't Sendable,
+        # so Swift 6's strict concurrency checking flags every "static
+        # let ...UUID = CBUUID(...)" in Models.swift as unsafe shared
+        # mutable state. They're actually fine -- CBUUID is immutable in
+        # practice -- but that's not something the compiler can see on
+        # its own, and there's no annotation on our side that fixes it
+        # (the type itself would need to be marked Sendable upstream in
+        # CoreBluetooth). Building against the Swift 6 *toolchain* is
+        # still fine; only the language mode's concurrency strictness
+        # needs to step back to 5.
+        SWIFT_VERSION: "5"
         TARGETED_DEVICE_FAMILY: "1,2" # iPhone + iPad
         GENERATE_INFOPLIST_FILE: NO
         CODE_SIGN_STYLE: Automatic
