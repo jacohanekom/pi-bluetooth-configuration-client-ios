@@ -1,0 +1,467 @@
+import SwiftUI
+
+/// Adapted from pi-bluetooth-configuration-client-mac's ContentView.swift --
+/// same screens and BLEManager calls, with iOS-specific adjustments:
+///   - A NavigationStack + toolbar button instead of a free-floating
+///     "Disconnect" header (there's no titlebar to put it in on iOS).
+///   - No fixed window frame (macOS-only concept; iOS fills the screen).
+///   - Autocorrection/autocapitalization disabled on the SSID/password/IP
+///     fields -- iOS's default text input behavior actively fights typing
+///     any of those (auto-capitalizing the first letter, offering
+///     spelling "corrections" for a Wi-Fi name), which macOS's plain
+///     NSTextField never did in the first place.
+struct ContentView: View {
+    @EnvironmentObject var ble: BLEManager
+    @State private var manualSSID: String = ""
+    @State private var password: String = ""
+    @State private var localIPField: String = ""
+    @State private var rangeStartField: String = ""
+    @State private var rangeEndField: String = ""
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                if !ble.isBluetoothReady {
+                    Text("Turn on Bluetooth to continue.")
+                        .foregroundStyle(.secondary)
+                } else if !ble.isConnected {
+                    deviceListSection
+                } else if ble.status.finished {
+                    connectedDetailsSection
+                } else {
+                    wizardSection
+                }
+
+                if let info = ble.lastInfo {
+                    Text(info)
+                        .foregroundStyle(.green)
+                        .font(.footnote)
+                }
+                if let error = ble.lastError {
+                    Text(error)
+                        .foregroundStyle(.red)
+                        .font(.footnote)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(20)
+            .navigationTitle("aipicam")
+            .toolbar {
+                if ble.isConnected {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Disconnect") { ble.disconnect() }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Device list
+
+    private var deviceListSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Nearby Devices").font(.headline)
+                Spacer()
+                Button {
+                    ble.startScan()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .help("Rescan")
+            }
+
+            if ble.discoveredDevices.isEmpty {
+                Text("Scanning for aipicam devices…")
+                    .foregroundStyle(.secondary)
+            }
+
+            List(ble.discoveredDevices) { device in
+                Button {
+                    ble.connect(to: device)
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(device.name)
+                                .font(.system(.body, design: .monospaced))
+                            Text("RSSI \(device.rssi) dBm")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if ble.isConnecting {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            .listStyle(.plain)
+            .frame(minHeight: 180)
+        }
+    }
+
+    // MARK: - Setup finished: post-init details screen
+    //
+    // Shown once the wizard is done (ble.status.finished): WiFi/network
+    // stats, relay controls, and Victron solar/battery telemetry, each
+    // behind its own DisclosureGroup rather than stacked flat -- there's
+    // a lot of information across the three, so each collapses until
+    // tapped open. Connectivity starts expanded since it's the one most
+    // people check first (the "did WiFi actually come up" question);
+    // Relays/Solar-Battery start collapsed.
+
+    private var connectedDetailsSection: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Connected to \(ble.connectedName ?? "device")")
+                    .font(.headline)
+
+                connectivityDisclosure
+                relaysDisclosure
+                solarBatteryDisclosure
+
+                Button("Reset") {
+                    ble.resetNetwork()
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    // MARK: - Connectivity (WiFi + Local Network)
+
+    @State private var connectivityExpanded = true
+
+    private var connectivityDisclosure: some View {
+        DisclosureGroup("Connectivity", isExpanded: $connectivityExpanded) {
+            VStack(alignment: .leading, spacing: 16) {
+                GroupBox("WiFi") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        LabeledContent("Network", value: ble.status.ssid)
+                        LabeledContent("IP address", value: ble.status.ip)
+                    }
+                    .padding(.top, 4)
+                }
+
+                GroupBox("Local Network") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        LabeledContent("Gateway IP", value: ble.ethernetConfig.ip)
+                        LabeledContent("DHCP range", value: "\(rangeAddress(ble.ethernetConfig.rangeStart)) – \(rangeAddress(ble.ethernetConfig.rangeEnd))")
+                        if ble.dhcpLeases.isEmpty {
+                            Text("No devices connected")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(ble.dhcpLeases) { lease in
+                                LabeledContent(lease.hostname.isEmpty ? lease.mac : lease.hostname, value: lease.ip)
+                            }
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+            }
+            .padding(.top, 8)
+        }
+        .font(.headline)
+    }
+
+    // MARK: - Relays (pi-relay-control-alpine, via pi-bluetooth-configuration)
+
+    @State private var relaysExpanded = false
+
+    private var relaysDisclosure: some View {
+        DisclosureGroup("Relays", isExpanded: $relaysExpanded) {
+            Group {
+                if ble.relays.isEmpty {
+                    Text("No relays configured")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(ble.relays) { relay in
+                            Toggle(isOn: Binding(
+                                get: { relay.isOn },
+                                set: { ble.setRelay(port: relay.port, on: $0) }
+                            )) {
+                                Text(relay.label)
+                            }
+                            .toggleStyle(.switch)
+                            .disabled(relay.state == "unknown")
+                        }
+                    }
+                }
+            }
+            .padding(.top, 8)
+        }
+        .font(.headline)
+    }
+
+    // MARK: - Solar/Battery Information (victron-ve-direct-alpine, via pi-bluetooth-configuration)
+
+    @State private var solarBatteryExpanded = false
+
+    private var solarBatteryDisclosure: some View {
+        DisclosureGroup("Solar/Battery Information", isExpanded: $solarBatteryExpanded) {
+            Group {
+                if !ble.victronStatus.connected {
+                    Text("No Victron device connected")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let device = ble.victronStatus.device {
+                            LabeledContent("Device", value: device.name)
+                            LabeledContent("Serial", value: device.serial)
+                        }
+                        if let v = ble.victronStatus.V {
+                            LabeledContent("Battery Voltage", value: String(format: "%.2f V", v))
+                        }
+                        if let i = ble.victronStatus.I {
+                            LabeledContent("Battery Current", value: formattedBatteryCurrent(i))
+                        }
+                        if let vpv = ble.victronStatus.VPV {
+                            LabeledContent("Solar Voltage", value: String(format: "%.2f V", vpv))
+                        }
+                        if let ppv = ble.victronStatus.PPV {
+                            LabeledContent("Solar Input", value: String(format: "%.0f W", ppv))
+                        }
+                        if let csName = ble.victronStatus.CSName {
+                            LabeledContent("Charge State", value: csName)
+                        }
+                        if let errName = ble.victronStatus.ERRName {
+                            LabeledContent("Error", value: errName)
+                        }
+                        if let h20 = ble.victronStatus.H20 {
+                            LabeledContent("Yield Today", value: String(format: "%.2f kWh", h20))
+                        }
+                    }
+                }
+            }
+            .padding(.top, 8)
+        }
+        .font(.headline)
+    }
+
+    // Note: no state-of-charge / time-to-go here -- those only exist on
+    // battery monitors (BMV-series), not the MPPT solar chargers this
+    // integration targets. Also no load output switch state -- not
+    // every MPPT has one, and it's always "ON" on this integration's
+    // hardware, so there's nothing informative to show. Neither field
+    // is reported by victron_control.hpp on the daemon side.
+
+    // Victron's "I" is signed: positive while the battery is charging,
+    // negative while it's discharging (a load drawing current), zero
+    // when idle. The raw sign alone isn't obvious at a glance, so this
+    // spells out which one it means alongside the magnitude.
+    private func formattedBatteryCurrent(_ amps: Double) -> String {
+        let magnitude = String(format: "%.2f A", abs(amps))
+        if amps > 0.01 { return "\(magnitude) (charging)" }
+        if amps < -0.01 { return "\(magnitude) (discharging)" }
+        return "\(magnitude) (idle)"
+    }
+
+    private func rangeAddress(_ lastOctet: Int) -> String {
+        let ip = ble.ethernetConfig.ip
+        guard let dot = ip.lastIndex(of: ".") else { return "\(lastOctet)" }
+        return "\(ip[ip.startIndex..<dot]).\(lastOctet)"
+    }
+
+    // MARK: - Wizard (WiFi not yet configured, or configured but not finished)
+
+    private var wizardSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Connected to \(ble.connectedName ?? "device")")
+                .font(.headline)
+
+            switch ble.wizardStep {
+            case .scanning:
+                scanningStep
+            case .pickNetwork:
+                pickNetworkStep
+            case .enterPassword(let ssid):
+                enterPasswordStep(ssid: ssid)
+            case .localNetworkConfig:
+                localNetworkConfigStep
+            }
+        }
+    }
+
+    private var scanningStep: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+            Text("Scanning for networks…")
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 160)
+    }
+
+    private var pickNetworkStep: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Choose a Network").font(.headline)
+                Spacer()
+                Button {
+                    ble.rescan()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .help("Rescan")
+            }
+
+            if ble.scanResults.isEmpty {
+                Text("No networks found.")
+                    .foregroundStyle(.secondary)
+            }
+
+            List(ble.scanResults) { result in
+                Button {
+                    password = ""
+                    ble.selectNetwork(ssid: result.ssid)
+                } label: {
+                    HStack {
+                        Text(result.ssid)
+                        Spacer()
+                        Text(result.security).foregroundStyle(.secondary)
+                        Text("\(result.rssi) dBm").foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            .listStyle(.plain)
+            .frame(minHeight: 180)
+
+            Button("Enter Network Manually") {
+                manualSSID = ""
+                password = ""
+                ble.selectNetwork(ssid: "")
+            }
+        }
+    }
+
+    private func enterPasswordStep(ssid: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Button {
+                    ble.backToNetworkList()
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .help("Back")
+                Text(ssid.isEmpty ? "Enter Network" : ssid)
+                    .font(.headline)
+            }
+
+            if ssid.isEmpty {
+                TextField("SSID", text: $manualSSID)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+            }
+            SecureField("Password (leave blank for an open network)", text: $password)
+                .textFieldStyle(.roundedBorder)
+
+            if ble.status.state == "connecting" || ble.status.state == "failed" {
+                statusBadge
+            }
+
+            Button("Connect") {
+                ble.connectToNetwork(ssid: ssid.isEmpty ? manualSSID : ssid, password: password)
+            }
+            .disabled((ssid.isEmpty ? manualSSID : ssid).isEmpty || ble.status.state == "connecting")
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    // MARK: - Local network configuration (last wizard step, after WiFi joins)
+
+    private var localNetworkConfigStep: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Local Network Configuration").font(.headline)
+            Text("eth0 already has a working gateway IP and DHCP server. Adjust it here if you'd like, or just continue.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Text("IP address").frame(width: 90, alignment: .leading)
+                TextField("192.168.4.1", text: $localIPField)
+                    .textFieldStyle(.roundedBorder)
+                    .keyboardType(.numbersAndPunctuation)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .frame(maxWidth: 160)
+            }
+            HStack {
+                Text("DHCP range").frame(width: 90, alignment: .leading)
+                TextField("2", text: $rangeStartField)
+                    .textFieldStyle(.roundedBorder)
+                    .keyboardType(.numberPad)
+                    .frame(maxWidth: 50)
+                Text("–")
+                TextField("200", text: $rangeEndField)
+                    .textFieldStyle(.roundedBorder)
+                    .keyboardType(.numberPad)
+                    .frame(maxWidth: 50)
+            }
+
+            Button("Finish") {
+                let start = Int(rangeStartField) ?? ble.ethernetConfig.rangeStart
+                let end = Int(rangeEndField) ?? ble.ethernetConfig.rangeEnd
+                ble.setLocalNetworkConfig(ip: localIPField, rangeStart: start, rangeEnd: end)
+                ble.finishSetup()
+            }
+            .disabled(!isValidIPv4(localIPField) || Int(rangeStartField) == nil || Int(rangeEndField) == nil)
+            .buttonStyle(.borderedProminent)
+        }
+        .onAppear {
+            if localIPField.isEmpty { localIPField = ble.ethernetConfig.ip }
+            if rangeStartField.isEmpty { rangeStartField = String(ble.ethernetConfig.rangeStart) }
+            if rangeEndField.isEmpty { rangeEndField = String(ble.ethernetConfig.rangeEnd) }
+        }
+    }
+
+    // Mirrors the daemon's own is_valid_ipv4 (eth_control.hpp): 4
+    // dot-separated all-digit octets, each 0-255. Just a client-side
+    // sanity gate on the Finish button -- the daemon is the actual
+    // validation boundary.
+    private func isValidIPv4(_ s: String) -> Bool {
+        let parts = s.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return false }
+        return parts.allSatisfy { part in
+            guard !part.isEmpty, part.count <= 3, part.allSatisfy(\.isNumber),
+                  let value = Int(part) else { return false }
+            return value >= 0 && value <= 255
+        }
+    }
+
+    private var statusBadge: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 10, height: 10)
+            Text(statusText)
+            Spacer()
+        }
+        .font(.subheadline)
+    }
+
+    private var statusColor: Color {
+        switch ble.status.state {
+        case "connecting": return .yellow
+        case "failed":     return .red
+        default:           return .gray
+        }
+    }
+
+    private var statusText: String {
+        switch ble.status.state {
+        case "connecting":
+            return "Connecting to \(ble.status.ssid)…"
+        case "failed":
+            return "Failed: \(ble.status.error)"
+        default:
+            return ""
+        }
+    }
+}

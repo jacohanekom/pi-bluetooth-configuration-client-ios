@@ -1,0 +1,42 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Needs a real Xcode toolchain (SwiftUI/CoreBluetooth headers, the iOS
+    # SDK) -- unlike the Alpine daemons in this project family, there's no
+    # Docker shortcut for that, so this runs on GitHub's hosted macOS
+    # runner, same as pi-bluetooth-configuration-client-mac's build.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Lint Info.plist
+        run: plutil -lint Sources/Aipicam/Info.plist
+
+      - name: Build for iOS Simulator
+        # Compile check only -- CODE_SIGNING_ALLOWED=NO skips needing a
+        # real signing identity/provisioning profile, which this repo
+        # doesn't have (no paid Apple Developer Program enrollment here).
+        # That also means this workflow can't produce a distributable
+        # .ipa or upload it as a release artifact the way the Mac
+        # client's CI does with an ad-hoc-signed .app -- iOS enforces
+        # real code signing for anything that runs on-device, unlike
+        # macOS's leniency toward an unsigned/ad-hoc-signed binary.
+        # Real Bluetooth hardware doesn't matter here either way: the
+        # Simulator has no Bluetooth radio at all, so this only ever
+        # verifies the app builds, not that it talks to a Pi.
+        run: |
+          xcodebuild -project Aipicam.xcodeproj -scheme Aipicam \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build

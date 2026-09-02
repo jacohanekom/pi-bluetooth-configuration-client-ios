@@ -1,0 +1,69 @@
+# XcodeGen spec -- run `xcodegen generate` (or `make generate`) to produce
+# Aipicam.xcodeproj from this file.
+#
+# This repo checks in project.yml, not the .xcodeproj itself, for the same
+# reason pi-bluetooth-configuration-client-mac's .gitignore excludes
+# *.xcodeproj: a generated project file is a build artifact, not source,
+# and raw .pbxproj diffs are unreviewable noise. Unlike that Mac client,
+# though, a plain `swift build` can't produce an installable, signed iOS
+# .app -- there's no SPM product type for that, and no equivalent of the
+# Mac build's "bare executable + Info.plist in __info_plist" trick, since
+# iOS enforces real app-bundle + code-signing rules that macOS doesn't for
+# a Bluetooth-only, non-sandboxed CLI binary. XcodeGen is the smallest
+# tool that bridges that gap: a readable, diffable YAML spec in, a normal
+# Xcode project out, checked in nowhere.
+name: Aipicam
+options:
+  bundleIdPrefix: com.jacohanekom
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  MARKETING_VERSION: "1.0.0"
+  CURRENT_PROJECT_VERSION: "1"
+targets:
+  Aipicam:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Sources/Aipicam
+        excludes:
+          - Info.plist
+    # XcodeGen owns and rewrites whatever file "info.path" points to on
+    # every `xcodegen generate` -- it does NOT merge with hand-edited
+    # content there (learned the hard way: an earlier version of this
+    # file pointed at a manually-written Info.plist, and generating
+    # silently clobbered it, NSBluetoothAlwaysUsageDescription included --
+    # which would have made the app crash on first Bluetooth access with
+    # no indication why). So the actual plist content lives here, in
+    # "properties", not in a separately maintained file.
+    info:
+      path: Sources/Aipicam/Info.plist
+      properties:
+        CFBundleDisplayName: aipicam
+        CFBundleName: aipicam
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSBluetoothAlwaysUsageDescription: >-
+          Used to discover and configure an aipicam device's WiFi over Bluetooth LE.
+        UILaunchScreen: {}
+        UIRequiresFullScreen: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_NAME: aipicam
+        PRODUCT_BUNDLE_IDENTIFIER: com.jacohanekom.aipicam
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1,2" # iPhone + iPad
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_STYLE: Automatic

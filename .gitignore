@@ -1,0 +1,8 @@
+*.xcodeproj
+Sources/Aipicam/Info.plist
+.build/
+.swiftpm/
+DerivedData/
+*.ipa
+*.xcarchive
+.DS_Store
