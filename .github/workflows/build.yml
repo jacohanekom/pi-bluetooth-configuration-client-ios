@@ -5,6 +5,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# This account's default GITHUB_TOKEN workflow permission is read-only,
+# so the release step below would otherwise fail with "Resource not
+# accessible by integration" on every tag push.
+permissions:
+  contents: write
+
 jobs:
   build:
     # Needs a real Xcode toolchain (SwiftUI/CoreBluetooth headers, the iOS
@@ -25,18 +31,56 @@ jobs:
         run: plutil -lint Sources/Aipicam/Info.plist
 
       - name: Build for iOS Simulator
-        # Compile check only -- CODE_SIGNING_ALLOWED=NO skips needing a
-        # real signing identity/provisioning profile, which this repo
-        # doesn't have (no paid Apple Developer Program enrollment here).
-        # That also means this workflow can't produce a distributable
-        # .ipa or upload it as a release artifact the way the Mac
-        # client's CI does with an ad-hoc-signed .app -- iOS enforces
-        # real code signing for anything that runs on-device, unlike
-        # macOS's leniency toward an unsigned/ad-hoc-signed binary.
-        # Real Bluetooth hardware doesn't matter here either way: the
+        # Compile check against the Simulator SDK first, cheaper and
+        # faster to fail on than a full device archive below. The
         # Simulator has no Bluetooth radio at all, so this only ever
         # verifies the app builds, not that it talks to a Pi.
         run: |
           xcodebuild -project Aipicam.xcodeproj -scheme Aipicam \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO build
+
+      - name: Archive for a real device (unsigned)
+        # This repo has no paid Apple Developer Program enrollment, so
+        # there's no real signing identity/provisioning profile for CI to
+        # sign with -- CODE_SIGN_IDENTITY="" + CODE_SIGNING_ALLOWED=NO
+        # skip that requirement, and AD_HOC_CODE_SIGNING_ALLOWED=YES asks
+        # the build system to apply its own throwaway ad hoc signature
+        # instead of failing outright. The result runs on a real
+        # arm64 device's CPU but isn't signed with anything Apple (or
+        # any device) will actually trust yet -- see the README for how
+        # to resign it yourself before installing.
+        run: |
+          xcodebuild archive -project Aipicam.xcodeproj -scheme Aipicam \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/aipicam.xcarchive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" CODE_SIGN_STYLE=Manual \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
+
+      - name: Package unsigned .ipa
+        # An .ipa is nothing more than a .zip with the .app inside a
+        # top-level "Payload/" directory -- xcodebuild's own
+        # -exportArchive step insists on a real signing identity/export
+        # method, which this repo doesn't have, so this assembles the
+        # .ipa by hand instead. `ditto` (not plain zip) preserves the
+        # bundle's extended attributes and ad hoc signature correctly.
+        run: |
+          set -e
+          APP=build/aipicam.xcarchive/Products/Applications/aipicam.app
+          test -d "$APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          ditto -c -k --keepParent Payload aipicam-unsigned.ipa
+          rm -rf Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aipicam-unsigned-ipa
+          path: aipicam-unsigned.ipa
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: aipicam-unsigned.ipa

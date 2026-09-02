@@ -54,6 +54,43 @@ control.
   automatic signing, or a paid Apple Developer Program membership for
   distributing beyond your own devices
 
+## Download a prebuilt .ipa (unsigned -- resign before installing)
+
+Every push builds `aipicam-unsigned.ipa` (GitHub Actions artifact on
+[the Build workflow](../../actions/workflows/build.yml); tagged `v*`
+pushes also attach it to a
+[GitHub Release](../../releases)). This lets you try aipicam on your own
+iPhone/iPad without installing Xcode or XcodeGen at all -- just a
+resigning tool and your own Apple ID.
+
+**It's genuinely unsigned**, not ad-hoc-signed the way the Mac client's
+`.app` is: CI has no paid Apple Developer Program enrollment, so there's
+no real signing identity for it to sign with (see "Build for real
+device" in `.github/workflows/build.yml` for exactly what that build
+does instead). iOS refuses to run anything without a valid signature
+from a certificate the device trusts, so this `.ipa` won't install as
+downloaded -- you need to resign it yourself first, with your own
+(free) Apple ID:
+
+1. Download `aipicam-unsigned.ipa` from Actions or a Release.
+2. Resign and install it with a sideloading tool, e.g.
+   [Sideloadly](https://sideloadly.io/) (macOS/Windows) -- point it at
+   the `.ipa`, sign in with your Apple ID, connect your device over USB,
+   and it handles resigning and installing in one step. (Similar tools:
+   [AltStore](https://altstore.io/), which additionally auto-refreshes
+   the signature for you in the background.)
+3. Trust the developer certificate on-device the first time: **Settings
+   → General → VPN & Device Management → \[your Apple ID\] → Trust**.
+
+**A free Apple ID's signature expires after 7 days** -- reinstall (or
+let AltStore auto-refresh) to keep using it past that. A paid Apple
+Developer Program membership signs for a full year instead, but isn't
+required for this.
+
+If you'd rather build and run from source directly (no separate
+resigning step -- Xcode does it for you against your own Apple ID), see
+"Build and run" below instead.
+
 ## Why XcodeGen instead of a checked-in .xcodeproj
 
 pi-bluetooth-configuration-client-mac's `.gitignore` already excludes
@@ -104,8 +141,8 @@ doesn't add any protocol of its own.
   the previous one.
 - No persisted list of previously-seen Pis; every launch re-scans.
 - No pairing/encryption at all -- see Security above.
-- CI (`.github/workflows/build.yml`) only compile-checks against the iOS
-  Simulator with code signing disabled -- it can't produce a
-  distributable, installed-on-a-real-device build the way the Mac
-  client's CI produces an ad-hoc-signed `.app`, since that needs a real
-  Apple Developer signing identity this project doesn't have.
+- CI's `aipicam-unsigned.ipa` (see "Download a prebuilt .ipa" above) is
+  genuinely unsigned, not ad-hoc-signed the way the Mac client's `.app`
+  is -- CI has no paid Apple Developer Program enrollment to sign with,
+  so you must resign it yourself with a sideloading tool before it'll
+  install.
