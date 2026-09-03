@@ -105,6 +105,18 @@ final class BLEManager: NSObject, ObservableObject {
     // connected yet" state.
     private var hasAutoScanned = false
 
+    // Retries the whole SSID/password/"connect" sequence if nothing about
+    // status.state has changed by the time this fires -- the same class
+    // of dropped-write BLE unreliability the relay retries exist for, just
+    // for the write that actually starts joining a network. Re-sends the
+    // full sequence each time (not just "connect" alone): do_connect
+    // consumes the daemon's staged SSID/PSK the moment it actually runs,
+    // so a bare "connect" retry after a *received* first attempt would
+    // join with an empty password instead of retrying safely.
+    private var connectRetryWorkItem: DispatchWorkItem?
+    private static let connectRetryInterval: TimeInterval = 6
+    private static let connectMaxAttempts = 3
+
     override init() {
         super.init()
         central = CBCentralManager(delegate: self, queue: nil)
@@ -162,13 +174,41 @@ final class BLEManager: NSObject, ObservableObject {
 
     func backToNetworkList() {
         lastError = nil
+        connectRetryWorkItem?.cancel()
+        connectRetryWorkItem = nil
         wizardStep = .pickNetwork
     }
 
     func connectToNetwork(ssid: String, password: String) {
+        connectRetryWorkItem?.cancel()
+        sendConnectAttempt(ssid: ssid, password: password, baselineState: status.state, attempt: 1)
+    }
+
+    private func sendConnectAttempt(ssid: String, password: String, baselineState: String, attempt: Int) {
         write(ssid, to: GATT.ssidUUID)
         write(password, to: GATT.passwordUUID)
         write("connect", to: GATT.commandUUID)
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.connectRetryWorkItem = nil
+            // Any change from the state this attempt started at means the
+            // daemon picked it up -- whether that's "connecting", or it
+            // already raced ahead to "connected"/"failed" by the time this
+            // fires (status_char's periodic re-poll, worst case, catches
+            // either within 5s). The normal status flow takes over from
+            // here either way; nothing left for this retry loop to do.
+            guard self.status.state == baselineState else { return }
+            guard self.isConnected, attempt < Self.connectMaxAttempts else {
+                self.lastError = self.isConnected
+                    ? "Couldn't reach the Pi to start connecting -- check the Bluetooth connection and try again."
+                    : "Lost connection before the connect request was confirmed."
+                return
+            }
+            self.sendConnectAttempt(ssid: ssid, password: password, baselineState: baselineState, attempt: attempt + 1)
+        }
+        connectRetryWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.connectRetryInterval, execute: workItem)
     }
 
     // Labeled "Reset" in the UI; the wire command is still "forget" --
@@ -267,6 +307,8 @@ final class BLEManager: NSObject, ObservableObject {
         hasReceivedStatus = false
         scanResults = []
         wizardStep = .scanning
+        connectRetryWorkItem?.cancel()
+        connectRetryWorkItem = nil
         ethernetConfig = .unknown
         dhcpLeases = []
         relays = []
