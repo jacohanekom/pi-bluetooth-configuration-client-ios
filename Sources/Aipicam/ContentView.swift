@@ -46,7 +46,6 @@ struct ContentView: View {
                 Spacer(minLength: 0)
             }
             .padding(20)
-            .navigationTitle("aipicam")
             .toolbar {
                 if ble.isConnected {
                     ToolbarItem(placement: .navigationBarTrailing) {
