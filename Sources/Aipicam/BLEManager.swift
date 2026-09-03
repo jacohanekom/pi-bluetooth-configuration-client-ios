@@ -51,6 +51,14 @@ final class BLEManager: NSObject, ObservableObject {
     @Published private(set) var isConnected = false
     @Published private(set) var connectedName: String?
     @Published private(set) var status: WifiStatus = .idle
+    /// False from the moment a connection starts until the first Status
+    /// read/notify actually decodes -- lets ContentView show a neutral
+    /// "checking..." placeholder instead of flashing the wizard's
+    /// scanning step for an already-finished Pi whenever that first read
+    /// is slow or lost outright (status_char's periodic re-poll, see the
+    /// daemon's README, would otherwise still correct it, just visibly,
+    /// a few seconds later).
+    @Published private(set) var hasReceivedStatus = false
     @Published private(set) var scanResults: [WifiScanResult] = []
     @Published private(set) var wizardStep: WizardStep = .scanning
     @Published private(set) var ethernetConfig: EthernetConfig = .unknown
@@ -122,6 +130,7 @@ final class BLEManager: NSObject, ObservableObject {
         expectRebootDisconnect = false
         reconnectAttempts = 0
         hasAutoScanned = false
+        hasReceivedStatus = false
         wizardStep = .scanning
         peripheral = device.peripheral
         peripheral?.delegate = self
@@ -255,6 +264,7 @@ final class BLEManager: NSObject, ObservableObject {
         connectedName = nil
         characteristics.removeAll()
         status = .idle
+        hasReceivedStatus = false
         scanResults = []
         wizardStep = .scanning
         ethernetConfig = .unknown
@@ -381,6 +391,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
             do {
                 let decoded = try JSONDecoder().decode(WifiStatus.self, from: data)
                 status = decoded
+                hasReceivedStatus = true
                 if decoded.finished {
                     // Already fully provisioned -- nothing wizard-related
                     // to do, ContentView shows the final details screen.

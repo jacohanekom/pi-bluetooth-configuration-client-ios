@@ -26,6 +26,14 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 } else if !ble.isConnected {
                     deviceListSection
+                } else if !ble.hasReceivedStatus {
+                    // Neutral placeholder for the brief window between
+                    // connecting and the first Status read/notify actually
+                    // decoding -- otherwise an already-finished Pi could
+                    // flash the wizard's "Scanning for networks" step
+                    // before self-correcting a few seconds later (see
+                    // status_char's periodic re-poll on the daemon side).
+                    ProgressView("Checking status…")
                 } else if ble.status.finished {
                     connectedDetailsSection
                 } else {
