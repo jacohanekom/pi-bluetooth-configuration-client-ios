@@ -127,6 +127,12 @@ struct ContentView: View {
                 }
                 .buttonStyle(.bordered)
             }
+            // ScrollView proposes its own width to this VStack, but doesn't
+            // clip content that ends up wider than that (e.g. a long relay
+            // label at a larger accessibility text size) -- pin the width
+            // explicitly so a trailing-aligned control like a Toggle's
+            // switch can't render past the screen's visible edge.
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
