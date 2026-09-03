@@ -344,6 +344,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        if reconnectAttempts > 0 { lastInfo = "Reconnected." }
         reconnectAttempts = 0
         isConnecting = false
         isConnected = true
@@ -377,6 +378,22 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         if reconnectAttempts < Self.maxReconnectAttempts {
             reconnectAttempts += 1
             isConnecting = true
+            // Deliberately not resetConnectionState() here -- isConnected
+            // stays true so the UI doesn't flash back to the device list
+            // for what's meant to be a quick, invisible reconnect. But
+            // every CBCharacteristic in this dict belongs to the now-dead
+            // connection; CoreBluetooth doesn't error a write/read against
+            // one, it just silently never delivers it -- no
+            // didWriteValueFor, no error, nothing reaching the daemon to
+            // log either. That looked identical to a dropped BLE write
+            // (what the relay/connect retry logic above exists for) but
+            // is actually this: clearing it makes write()'s existing
+            // "Not connected" guard catch anything attempted mid-
+            // reconnect instead of it vanishing silently. Repopulated
+            // fresh, and validly, once didDiscoverCharacteristicsFor
+            // reruns after the reconnect succeeds below.
+            characteristics.removeAll()
+            lastInfo = "Connection dropped -- reconnecting…"
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.reconnectDelay) { [weak self] in
                 guard let self else { return }
                 self.central.connect(peripheral, options: nil)
