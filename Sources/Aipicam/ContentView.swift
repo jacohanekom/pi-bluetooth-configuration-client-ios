@@ -189,14 +189,28 @@ struct ContentView: View {
                 } else {
                     VStack(alignment: .leading, spacing: 6) {
                         ForEach(ble.relays) { relay in
-                            Toggle(isOn: Binding(
-                                get: { relay.isOn },
-                                set: { ble.setRelay(port: relay.port, on: $0) }
-                            )) {
-                                Text(relay.label)
+                            let isPending = ble.pendingRelayPorts.contains(relay.port)
+                            HStack {
+                                Toggle(isOn: Binding(
+                                    get: { relay.isOn },
+                                    set: { ble.setRelay(port: relay.port, on: $0) }
+                                )) {
+                                    Text(relay.label)
+                                }
+                                .toggleStyle(.switch)
+                                .disabled(relay.state == "unknown" || isPending)
+
+                                // pi-bluetooth-configuration only re-polls and
+                                // republishes relay state on its own 5s cadence,
+                                // so without this the switch would sit
+                                // unconfirmed (or visibly bounce back) for up
+                                // to that long after a tap -- this spinner
+                                // covers that gap instead.
+                                if isPending {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
                             }
-                            .toggleStyle(.switch)
-                            .disabled(relay.state == "unknown")
                         }
                     }
                     // DisclosureGroup indents its content from the leading

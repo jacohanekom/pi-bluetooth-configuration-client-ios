@@ -56,6 +56,13 @@ final class BLEManager: NSObject, ObservableObject {
     @Published private(set) var ethernetConfig: EthernetConfig = .unknown
     @Published private(set) var dhcpLeases: [DhcpLease] = []
     @Published private(set) var relays: [RelayState] = []
+    /// Ports with a write in flight -- pi-bluetooth-configuration only
+    /// re-polls and republishes relay state on its own 5s cadence (see the
+    /// daemon's README, "Relay control"), so without this the switch would
+    /// sit unconfirmed (or visibly bounce back and forth) for up to that
+    /// long after a tap. The UI shows a spinner in place of the switch
+    /// while a port is pending.
+    @Published private(set) var pendingRelayPorts: Set<Int> = []
     @Published private(set) var victronStatus: VictronStatus = .disconnected
     @Published var lastError: String?
     @Published var lastInfo: String?
@@ -166,6 +173,10 @@ final class BLEManager: NSObject, ObservableObject {
     /// gated by wizard step or `finished`; it's available any time a
     /// relay shows up in `relays` at all.
     func setRelay(port: Int, on: Bool) {
+        if let idx = relays.firstIndex(where: { $0.port == port }) {
+            relays[idx].state = on ? "on" : "off"
+        }
+        pendingRelayPorts.insert(port)
         write("relay \(port) \(on ? "on" : "off")", to: GATT.commandUUID)
     }
 
@@ -197,6 +208,7 @@ final class BLEManager: NSObject, ObservableObject {
         ethernetConfig = .unknown
         dhcpLeases = []
         relays = []
+        pendingRelayPorts.removeAll()
         victronStatus = .disconnected
     }
 }
@@ -351,6 +363,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
         case GATT.relaysUUID:
             if let decoded = try? JSONDecoder().decode([RelayState].self, from: data) {
                 relays = decoded
+                pendingRelayPorts.removeAll()
             }
         case GATT.victronUUID:
             if let decoded = try? JSONDecoder().decode(VictronStatus.self, from: data) {
