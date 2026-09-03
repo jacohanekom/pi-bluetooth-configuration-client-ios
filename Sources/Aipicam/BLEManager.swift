@@ -71,6 +71,20 @@ final class BLEManager: NSObject, ObservableObject {
     private var peripheral: CBPeripheral?
     private var characteristics: [CBUUID: CBCharacteristic] = [:]
 
+    // What each pending relay port was actually asked to become --
+    // compared against every relays notification so a retry can tell
+    // "this confirms my request" from "some unrelated/stale update
+    // arrived", the same way pi-bluetooth-configuration's own do_relay
+    // retries until pi-relay-control-alpine confirms with OK rather than
+    // accepting the first attempt regardless of outcome. Needed because a
+    // write can silently never reach the daemon at all (a BLE hiccup, a
+    // mid-command disconnect) -- with nothing watching for that, the
+    // switch would just sit pending forever with no way to notice.
+    private var pendingRelayDesired: [Int: Bool] = [:]
+    private var relayRetryWorkItems: [Int: DispatchWorkItem] = [:]
+    private static let relayRetryInterval: TimeInterval = 1.5
+    private static let relayMaxAttempts = 5
+
     private var userInitiatedDisconnect = false
     // Set once we know the daemon is about to reboot (a successful
     // "finish", or a reset we just sent) -- the BLE disconnect that
@@ -177,7 +191,45 @@ final class BLEManager: NSObject, ObservableObject {
             relays[idx].state = on ? "on" : "off"
         }
         pendingRelayPorts.insert(port)
+        pendingRelayDesired[port] = on
+        relayRetryWorkItems.removeValue(forKey: port)?.cancel() // superseded by this new request
+        sendRelayCommand(port: port, on: on, attempt: 1)
+    }
+
+    /// Sends one relay write, then schedules a follow-up after
+    /// relayRetryInterval that either retries or gives up, depending on
+    /// whether a relays notification has confirmed it by then -- see
+    /// pendingRelayDesired's comment for why "confirmed" means "matches
+    /// what was actually requested", not just "any update arrived".
+    private func sendRelayCommand(port: Int, on: Bool, attempt: Int) {
         write("relay \(port) \(on ? "on" : "off")", to: GATT.commandUUID)
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.relayRetryWorkItems.removeValue(forKey: port)
+            // Either a relays notification already confirmed this port
+            // (clearing pendingRelayDesired[port]) or a newer setRelay
+            // call superseded this one with a different target value --
+            // either way, this stale retry has nothing left to do.
+            guard self.pendingRelayDesired[port] == on else { return }
+
+            guard self.isConnected, attempt < Self.relayMaxAttempts else {
+                self.pendingRelayPorts.remove(port)
+                self.pendingRelayDesired.removeValue(forKey: port)
+                self.lastError = self.isConnected
+                    ? "Relay command wasn't confirmed after \(Self.relayMaxAttempts) attempts -- check the Pi's connection to pi-relay-control-alpine."
+                    : "Lost connection before the relay command was confirmed."
+                // A fresh read reflects reality instead of this attempt's
+                // optimistic guess, which never got confirmed either way.
+                if let characteristic = self.characteristics[GATT.relaysUUID] {
+                    self.peripheral?.readValue(for: characteristic)
+                }
+                return
+            }
+            self.sendRelayCommand(port: port, on: on, attempt: attempt + 1)
+        }
+        relayRetryWorkItems[port] = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.relayRetryInterval, execute: workItem)
     }
 
     /// Concludes the setup wizard -- the daemon creates its marker file
@@ -209,6 +261,9 @@ final class BLEManager: NSObject, ObservableObject {
         dhcpLeases = []
         relays = []
         pendingRelayPorts.removeAll()
+        pendingRelayDesired.removeAll()
+        relayRetryWorkItems.values.forEach { $0.cancel() }
+        relayRetryWorkItems.removeAll()
         victronStatus = .disconnected
     }
 }
@@ -363,7 +418,17 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
         case GATT.relaysUUID:
             if let decoded = try? JSONDecoder().decode([RelayState].self, from: data) {
                 relays = decoded
-                pendingRelayPorts.removeAll()
+                // Only clear/stop retrying ports whose confirmed state
+                // actually matches what was requested -- an update that
+                // doesn't (e.g. it reflects a still-in-progress retry, or
+                // arrived just before this attempt's write took effect)
+                // leaves the retry loop running instead of declaring
+                // victory on an update that isn't really the answer.
+                for relay in decoded where pendingRelayDesired[relay.port] == relay.isOn {
+                    pendingRelayPorts.remove(relay.port)
+                    pendingRelayDesired.removeValue(forKey: relay.port)
+                    relayRetryWorkItems.removeValue(forKey: relay.port)?.cancel()
+                }
             }
         case GATT.victronUUID:
             if let decoded = try? JSONDecoder().decode(VictronStatus.self, from: data) {
