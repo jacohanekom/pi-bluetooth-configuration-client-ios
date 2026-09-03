@@ -2,17 +2,15 @@
 
 **aipicam** -- an iOS app to configure WiFi on a Raspberry Pi running
 [pi-bluetooth-configuration](https://github.com/jacohanekom/pi-bluetooth-configuration-alpine)
-over Bluetooth LE, using the iPhone/iPad's own Bluetooth radio. This is
-the iOS counterpart to
-[pi-bluetooth-configuration-client-mac](https://github.com/jacohanekom/pi-bluetooth-configuration-client-mac)
--- same GATT protocol, same screens, same feature set; `Models.swift` and
-`BLEManager.swift` are near-identical ports (CoreBluetooth's central-role
-API doesn't differ between the two platforms), and `ContentView.swift`
-carries over the same wizard/details-screen logic with iOS-appropriate
-chrome (a `NavigationStack` instead of a free-floating window titlebar
-button, no fixed window size, autocorrection/autocapitalization turned
-off on the SSID/password/IP fields since iOS defaults to fighting all
-three).
+over Bluetooth LE, using the iPhone/iPad's own Bluetooth radio. This
+started as the iOS counterpart to a macOS client
+(`pi-bluetooth-configuration-client-mac`, now retired -- a phone in your
+pocket covers the same provisioning need without requiring a Mac, so
+there was no reason to keep maintaining both): same GATT protocol, same
+screens, same feature set, just with iOS-appropriate chrome (a
+`NavigationStack` instead of a free-floating window titlebar button, no
+fixed window size, autocorrection/autocapitalization turned off on the
+SSID/password/IP fields since iOS defaults to fighting all three).
 
 Scans for nearby devices (shown by hardware serial number, so multiple
 units are distinguishable), connects (no pairing -- see Security below),
@@ -20,9 +18,8 @@ and walks through a wizard: pick a WiFi network, enter its password,
 confirm eth0's local network (gateway IP + DHCP range), then finish --
 no SSH, no keyboard on the Pi. Once setup is finished, a details screen
 shows WiFi/network stats, relay controls, and Victron solar/battery
-telemetry behind three collapsible sections -- see
-pi-bluetooth-configuration-client-mac's README, "Using it", for the exact
-walkthrough (identical on this platform).
+telemetry behind three collapsible sections -- see "Using it" below for
+the exact walkthrough.
 
 Built with SwiftUI + CoreBluetooth.
 
@@ -176,23 +173,86 @@ debug it.
 
 ## Why XcodeGen instead of a checked-in .xcodeproj
 
-pi-bluetooth-configuration-client-mac's `.gitignore` already excludes
-`*.xcodeproj` on principle -- a generated project file is a build
-artifact, not source, and raw `.pbxproj` diffs are unreviewable noise.
-That repo can still ship without one because a plain `swift build`
-produces a real, runnable macOS executable on its own. iOS has no
-equivalent: there's no SPM product type for an installable, signed `.app`,
-and none of the leniency macOS extends to a bare, unsigned CLI binary
-(the Mac client's trick of embedding `NSBluetoothAlwaysUsageDescription`
-straight into the executable's `__info_plist` section doesn't have an
-iOS counterpart -- iOS enforces real app-bundle and code-signing rules
-unconditionally). An Xcode project is unavoidable here.
+The now-retired macOS client's `.gitignore` excluded `*.xcodeproj` on
+principle -- a generated project file is a build artifact, not source,
+and raw `.pbxproj` diffs are unreviewable noise. That repo could still
+ship without one because a plain `swift build` produces a real, runnable
+macOS executable on its own. iOS has no equivalent: there's no SPM
+product type for an installable, signed `.app`, and none of the leniency
+macOS extends to a bare, unsigned CLI binary (that Mac client's trick of
+embedding `NSBluetoothAlwaysUsageDescription` straight into the
+executable's `__info_plist` section doesn't have an iOS counterpart --
+iOS enforces real app-bundle and code-signing rules unconditionally). An
+Xcode project is unavoidable here.
 
 [`project.yml`](project.yml) is the checked-in source of truth instead --
 a small, readable, diffable spec that [XcodeGen](https://github.com/yonaskolb/XcodeGen)
 turns into `Aipicam.xcodeproj` on demand. The generated project itself
-stays out of git, same as the Mac client's philosophy, just one level
-removed.
+stays out of git, same principle as before, just one level removed.
+
+## Using it
+
+1. Launch the app. It scans automatically for devices advertising the
+   WiFi-configuration GATT service and lists them by hardware serial
+   number.
+2. Tap a device to connect -- no pairing step, connecting is enough
+   (see Security above for what that trades away). If the link drops
+   unexpectedly (the Pi 3's Bluetooth hardware has known stability
+   issues independent of pairing), the app retries automatically (up to
+   3 times, 1s apart) before surfacing an error.
+3. **If setup already finished on this Pi**, you land straight on the
+   details screen (see step 9 below for what's on it). Skip to step 8.
+4. **Otherwise**, a wizard starts automatically:
+   - It scans for networks right away (spinner, no button to press).
+   - Pick one from the list, or **Enter Network Manually** for a hidden
+     network.
+5. Enter the password (leave blank for an open network) and tap
+   **Connect**. A status line shows live progress
+   (`connecting` → `connected`/`failed`); on failure, edit and retry, or
+   tap **◀** to go back to the network list and try a different one.
+6. Once WiFi joins, the wizard moves to **Local Network Configuration**:
+   `eth0` already has a working gateway IP and DHCP server (it's always
+   on, from the moment the Pi first boots -- see the daemon's README,
+   "Ethernet direct-connect"), prefilled here so you can just confirm
+   it, or change the IP/DHCP range if you'd like something different.
+7. Tap **Finish**. This is what actually concludes setup and reboots
+   the Pi a few seconds later -- the BLE connection dropping is
+   expected, not an error. Reconnecting afterward lands on the details
+   screen described next.
+8. **Reset** removes the network the Pi last configured and reboots it
+   the same way (this sends the same `forget` command the daemon's GATT
+   protocol always had -- "Reset" is just how this app labels it). Only
+   shown once setup has finished: resetting only makes sense once
+   there's something to reset. Local network settings aren't touched by
+   Reset and become editable again once the wizard restarts.
+9. The post-setup details screen has three collapsible sections (tap
+   each to expand/collapse -- **Connectivity** starts open, the other
+   two start collapsed since there's a lot to show across all three):
+   - **Connectivity**: WiFi network/IP, and the local network's gateway
+     IP + DHCP range plus whatever's currently allocated to devices
+     plugged into `eth0`.
+   - **Relays**: one toggle switch per relay, if any are configured
+     (see the daemon's README, "Relay control" -- an optional
+     integration with
+     [pi-relay-control-alpine](https://github.com/jacohanekom/pi-relay-control-alpine)).
+     A switch is disabled while that relay's state reads as unknown
+     (pi-relay-control-alpine not reachable on the configured port).
+     Shows "No relays configured" if `[relays]` is empty.
+   - **Solar/Battery Information**: the latest reading from a Victron
+     MPPT solar charger, if one's connected (see the daemon's README,
+     "Victron solar/battery telemetry" -- an optional integration with
+     [victron-ve-direct-alpine](https://github.com/jacohanekom/victron-ve-direct-alpine)):
+     device name/serial, battery voltage, battery current (labeled
+     charging/discharging/idle, since the raw sign isn't obvious at a
+     glance), solar voltage/input power, charge state, error, and yield
+     today. Shows "No Victron device connected" if nothing's reachable.
+     (State of charge / time to go aren't shown -- those only exist on
+     battery monitors, not the MPPT chargers this integration targets.
+     Load output isn't shown either -- not every MPPT has one, and it's
+     always "ON" on this integration's hardware.)
+
+Tap **Disconnect** in the toolbar at any point (during the wizard or on
+the details screen) to end the session.
 
 ## Build and run
 
