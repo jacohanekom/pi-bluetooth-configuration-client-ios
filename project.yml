@@ -48,6 +48,13 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSBluetoothAlwaysUsageDescription: >-
           Used to discover and configure an aipicam device's WiFi over Bluetooth LE.
+        # Answers App Store Connect's export-compliance question ("What
+        # type of encryption algorithms does your app implement?") at
+        # build time instead of it being asked -- and blocking TestFlight
+        # availability -- on every single upload. False is accurate: BLE
+        # traffic here is deliberately unencrypted (see README, "Security
+        # model"), and the app makes no HTTPS/TLS calls of its own.
+        ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UIRequiresFullScreen: false
         UISupportedInterfaceOrientations:
