@@ -105,16 +105,39 @@ This needs a handful of one-time setup steps on your end first --
 things only you can do, since they require your own Apple ID/App Store
 Connect login:
 
-1. **Create the app record in App Store Connect**, if you haven't
-   already: [App Store Connect](https://appstoreconnect.apple.com) →
-   Apps → **+** → New App, bundle ID `com.jacohanekom.aipicam`
-   (register that bundle ID under Certificates, Identifiers & Profiles
-   first if it doesn't already exist -- Xcode does this for you
-   automatically the first time you archive locally with your own team
-   selected, if you'd rather not do it by hand). Uploads fail outright
-   if there's no app record matching the bundle ID yet; nothing in CI
-   creates this step for you.
-2. **Create an App Store Connect API key**: App Store Connect → Users
+1. **Register the Bundle ID**, if you haven't already (skip this if
+   you've ever archived/run this project locally in Xcode with your own
+   team selected -- Xcode registers it automatically the first time it
+   needs to): [developer.apple.com/account](https://developer.apple.com/account)
+   → Certificates, Identifiers & Profiles → Identifiers → **+** → App
+   IDs → Continue → App → Continue. Description `aipicam` (an internal
+   label, not user-facing), Bundle ID **Explicit** →
+   `com.jacohanekom.aipicam` (must match `project.yml`'s
+   `PRODUCT_BUNDLE_IDENTIFIER` exactly). Leave every capability
+   unchecked -- Bluetooth needs no App ID capability, just the
+   `NSBluetoothAlwaysUsageDescription` string already in `Info.plist`.
+   Continue → Register.
+2. **Create the app record in App Store Connect**:
+   [appstoreconnect.apple.com](https://appstoreconnect.apple.com) → Apps
+   → **+** → New App. Platforms: iOS. Name: the public App Store listing
+   name -- **must be globally unique across the whole App Store**, not
+   just your account (try `aipicam` first; if it's taken, something like
+   `aipicam WiFi Setup` instead -- this is separate from
+   `CFBundleDisplayName`, which can stay `aipicam` either way). Bundle
+   ID: pick `com.jacohanekom.aipicam` from the dropdown (only appears
+   here once step 1 is done). SKU: any unique string for your own
+   bookkeeping, e.g. `aipicam-ios-1` (never shown to users). User
+   Access: Full Access. Create. Uploads fail outright if this app
+   record doesn't exist yet; nothing in CI creates it for you.
+
+   Once CI uploads a build, it shows up under this app's **TestFlight**
+   tab after ~10-30 minutes of Apple's processing. Use **Internal
+   Testing** to actually try it (add yourself/other App Store Connect
+   users as internal testers under Users and Access -- available the
+   moment processing finishes, no review needed); **External Testing**
+   (a public link, anyone) additionally requires a short Beta App Review
+   the first time.
+3. **Create an App Store Connect API key**: App Store Connect → Users
    and Access → Integrations → App Store Connect API → **+**. Give it
    the **App Manager** role (not just Developer -- it needs to be able
    to create/renew signing certificates and provisioning profiles on
@@ -122,19 +145,19 @@ Connect login:
    Download the `.p8` file **immediately** -- App Store Connect only
    lets you download it once. Note the **Key ID** and **Issuer ID**
    shown on that same page.
-3. **Find your Team ID**: [developer.apple.com/account](https://developer.apple.com/account)
+4. **Find your Team ID**: [developer.apple.com/account](https://developer.apple.com/account)
    → Membership details, or Xcode → Settings → Accounts → your team.
-4. **Add four repo secrets** (Settings → Secrets and variables →
+5. **Add four repo secrets** (Settings → Secrets and variables →
    Actions → New repository secret):
 
    | Secret | Value |
    |---|---|
    | `APPSTORE_API_KEY_P8_BASE64` | `base64 -i AuthKey_XXXXXXXXXX.p8 \| pbcopy`, then paste |
-   | `APPSTORE_KEY_ID` | the Key ID from step 2 |
-   | `APPSTORE_ISSUER_ID` | the Issuer ID from step 2 |
-   | `APPSTORE_TEAM_ID` | the Team ID from step 3 |
+   | `APPSTORE_KEY_ID` | the Key ID from step 3 |
+   | `APPSTORE_ISSUER_ID` | the Issuer ID from step 3 |
+   | `APPSTORE_TEAM_ID` | the Team ID from step 4 |
 
-5. Push a tag: `git tag v1.0.0 && git push origin v1.0.0` -- or just run
+6. Push a tag: `git tag v1.0.0 && git push origin v1.0.0` -- or just run
    the workflow manually once to test the setup without cutting a real
    version tag.
 
