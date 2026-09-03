@@ -91,6 +91,66 @@ If you'd rather build and run from source directly (no separate
 resigning step -- Xcode does it for you against your own Apple ID), see
 "Build and run" below instead.
 
+## TestFlight (requires an Apple Developer Program membership)
+
+[`.github/workflows/testflight.yml`](.github/workflows/testflight.yml)
+archives, signs with a *real* Apple Developer Program identity, and
+uploads a build to App Store Connect on every `v*` tag push (or manually
+via **Actions → TestFlight → Run workflow**) -- unlike `build.yml`'s
+`aipicam-unsigned.ipa`, this produces something installable straight
+from the TestFlight app, no resigning tool needed, for anyone you invite
+as a tester.
+
+This needs a handful of one-time setup steps on your end first --
+things only you can do, since they require your own Apple ID/App Store
+Connect login:
+
+1. **Create the app record in App Store Connect**, if you haven't
+   already: [App Store Connect](https://appstoreconnect.apple.com) →
+   Apps → **+** → New App, bundle ID `com.jacohanekom.aipicam`
+   (register that bundle ID under Certificates, Identifiers & Profiles
+   first if it doesn't already exist -- Xcode does this for you
+   automatically the first time you archive locally with your own team
+   selected, if you'd rather not do it by hand). Uploads fail outright
+   if there's no app record matching the bundle ID yet; nothing in CI
+   creates this step for you.
+2. **Create an App Store Connect API key**: App Store Connect → Users
+   and Access → Integrations → App Store Connect API → **+**. Give it
+   the **App Manager** role (not just Developer -- it needs to be able
+   to create/renew signing certificates and provisioning profiles on
+   its own, non-interactively, via `-allowProvisioningUpdates`).
+   Download the `.p8` file **immediately** -- App Store Connect only
+   lets you download it once. Note the **Key ID** and **Issuer ID**
+   shown on that same page.
+3. **Find your Team ID**: [developer.apple.com/account](https://developer.apple.com/account)
+   → Membership details, or Xcode → Settings → Accounts → your team.
+4. **Add four repo secrets** (Settings → Secrets and variables →
+   Actions → New repository secret):
+
+   | Secret | Value |
+   |---|---|
+   | `APPSTORE_API_KEY_P8_BASE64` | `base64 -i AuthKey_XXXXXXXXXX.p8 \| pbcopy`, then paste |
+   | `APPSTORE_KEY_ID` | the Key ID from step 2 |
+   | `APPSTORE_ISSUER_ID` | the Issuer ID from step 2 |
+   | `APPSTORE_TEAM_ID` | the Team ID from step 3 |
+
+5. Push a tag: `git tag v1.0.0 && git push origin v1.0.0` -- or just run
+   the workflow manually once to test the setup without cutting a real
+   version tag.
+
+The version shown in TestFlight comes from the tag itself (`v1.2.3` →
+`1.2.3`); the build number is the GitHub Actions run number, which only
+ever goes up, since App Store Connect rejects re-uploading a build
+number it's already seen for the same version.
+
+**I can't test this workflow myself** -- it needs your actual Apple
+Developer account, which I have no access to. Unlike `build.yml`'s
+unsigned `.ipa` (which I built, downloaded, and inspected end-to-end
+before calling it done), this one is written from documented Apple
+tooling behavior, not verified against a real upload. Expect to iterate
+on the first run or two -- share the failing step's log and I'll help
+debug it.
+
 ## Why XcodeGen instead of a checked-in .xcodeproj
 
 pi-bluetooth-configuration-client-mac's `.gitignore` already excludes
@@ -142,7 +202,6 @@ doesn't add any protocol of its own.
 - No persisted list of previously-seen Pis; every launch re-scans.
 - No pairing/encryption at all -- see Security above.
 - CI's `aipicam-unsigned.ipa` (see "Download a prebuilt .ipa" above) is
-  genuinely unsigned, not ad-hoc-signed the way the Mac client's `.app`
-  is -- CI has no paid Apple Developer Program enrollment to sign with,
-  so you must resign it yourself with a sideloading tool before it'll
-  install.
+  genuinely unsigned -- resign it yourself with a sideloading tool
+  before it'll install, or use the TestFlight workflow below instead if
+  you have an Apple Developer Program membership.
