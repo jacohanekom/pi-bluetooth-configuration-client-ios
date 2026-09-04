@@ -54,11 +54,24 @@ struct ContentView: View {
     }
 
     // MARK: - Address entry (replaces the old BLE device list)
+    //
+    // Searches automatically on first appearance (see the .task below --
+    // keyed to a fixed value so it only fires once per appearance, not
+    // on every body re-evaluation) via mDNS/Bonjour; a found Pi is
+    // connected to directly with no tap needed. Manual entry stays
+    // available the whole time as a fallback, and becomes the primary
+    // call to action once a search comes back empty.
 
     private var addressEntrySection: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if http.isSearching {
+                searchingStep
+            } else if http.searchFailed {
+                searchFailedStep
+            }
+
             Text("Connect to a Pi").font(.headline)
-            Text("Join the Pi's own WiFi network first (its name is its serial number) if it's showing one, then enter its address below. A fresh or unconfigured Pi uses \(HTTPManager.defaultAddress) by default.")
+            Text("Enter its address below, or tap Search Again once you've joined its own WiFi network (its name is its serial number). A fresh or unconfigured Pi uses \(HTTPManager.defaultAddress) by default.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
@@ -80,6 +93,32 @@ struct ContentView: View {
             .buttonStyle(.borderedProminent)
             .disabled(http.isConnecting || http.serverAddress.trimmingCharacters(in: .whitespaces).isEmpty)
         }
+        .task {
+            http.startDiscovery()
+        }
+    }
+
+    private var searchingStep: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Searching for a Pi on this network…")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var searchFailedStep: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("No Pi found on this network")
+                .font(.headline)
+            Text("If you haven't set one up yet (or it couldn't join your WiFi), join its own network first: **Settings → WiFi**, look for a network named after its serial number, and connect (no password). Then tap Search Again -- or enter its address below if you already know it.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Button("Search Again") {
+                http.startDiscovery()
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(.bottom, 8)
     }
 
     // MARK: - Setup finished: post-init details screen

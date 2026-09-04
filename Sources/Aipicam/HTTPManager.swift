@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 /// Which step of the setup wizard is showing. Only relevant while
 /// status.wifi.finished is false -- once it's true, ContentView shows the
@@ -24,11 +25,18 @@ enum WizardStep: Equatable {
 ///
 /// Unlike the BLE-era design this replaces, there's no server push: this
 /// polls GET /status on a fixed interval instead of subscribing to
-/// notifications. There's also no device discovery (no BLE scan, no
-/// mDNS/Bonjour on the daemon side yet) -- the user reaches the Pi by
-/// address, either the well-known fallback-AP default (prefilled) or the
-/// Pi's real address once it's joined a network, same as any other
-/// device with a local web UI.
+/// notifications.
+///
+/// Discovery is automatic: the daemon advertises itself over mDNS/
+/// Bonjour as "<serial>._aipicam._tcp.local." (see that repo's README,
+/// "Discovery"), and startDiscovery() below browses for it via
+/// NWBrowser on launch, resolving the first match to a real host:port
+/// via a throwaway NWConnection (Network framework has no "resolve
+/// without connecting" API -- this is Apple's own documented pattern)
+/// before handing that address to connectToServer() same as if it had
+/// been typed in. Manual address entry (prefilled with the documented
+/// fallback-AP default) remains available as a fallback for the rare
+/// network that blocks mDNS multicast, or if nothing was found in time.
 ///
 /// This is a one-shot provisioning flow, not a managed session: the Pi
 /// reboots a few seconds after "finish" or "forget" (see that repo's
@@ -60,8 +68,21 @@ final class HTTPManager: ObservableObject {
     private static let failureThreshold = 3
     private static let relayMaxAttempts = 3
     private static let relayRetryInterval: TimeInterval = 1.5
+    private static let bonjourServiceType = "_aipicam._tcp"
+    // How long to browse before giving up and directing the user to the
+    // fallback AP instead -- long enough to ride out a normal mDNS
+    // announce/query cycle (the daemon itself announces within ~1s of
+    // starting, see mdns_responder.hpp), short enough not to leave the
+    // user staring at a spinner for a device that was never going to
+    // answer (nothing set up yet, wrong network, mDNS blocked).
+    private static let discoveryTimeout: TimeInterval = 5
 
     @Published var serverAddress: String
+    @Published private(set) var isSearching = false
+    // True once a search has completed without finding anything --
+    // ContentView uses this to switch from a search spinner to guidance
+    // ("join the Pi's own network") plus the manual-entry fallback.
+    @Published private(set) var searchFailed = false
     @Published private(set) var isConnecting = false
     @Published private(set) var isConnected = false
     @Published private(set) var status: StatusResponse = .empty
@@ -94,6 +115,16 @@ final class HTTPManager: ObservableObject {
     private var expectDisconnectMessage = ""
     private var addressAfterDisconnect: String?
 
+    private var browser: NWBrowser?
+    private var resolveConnection: NWConnection?
+    private var discoveryTimeoutTask: DispatchWorkItem?
+    // Network framework callbacks for a browser/connection started on
+    // .main only actually fire while the main run loop is free to pump
+    // them -- true throughout a normal SwiftUI app's lifetime, but this
+    // is called out because a bare blocking wait on the main thread
+    // (e.g. in a command-line test harness) would deadlock them instead.
+    private let netQueue = DispatchQueue.main
+
     init() {
         serverAddress = UserDefaults.standard.string(forKey: Self.addressDefaultsKey) ?? Self.defaultAddress
         let config = URLSessionConfiguration.ephemeral
@@ -117,6 +148,11 @@ final class HTTPManager: ObservableObject {
             lastError = "Enter the Pi's address first."
             return
         }
+        // A manual Connect tap (or a just-finished discovery calling this
+        // itself) always wins over a still-running search -- without
+        // this, a discovery result arriving moments later could stomp on
+        // an address the user just entered by hand.
+        stopDiscovery()
         lastError = nil
         lastInfo = nil
         isConnecting = true
@@ -141,8 +177,106 @@ final class HTTPManager: ObservableObject {
     }
 
     func disconnect() {
+        stopDiscovery()
         stopPolling()
         resetConnectionState()
+    }
+
+    // MARK: - Discovery (mDNS/Bonjour)
+
+    /// Browses for the daemon's advertised "_aipicam._tcp" service and,
+    /// on the first match, resolves and connects to it automatically --
+    /// see this file's own header comment for why resolution needs a
+    /// throwaway NWConnection rather than a dedicated "resolve" call.
+    /// Safe to call again after a previous search finished (searchFailed
+    /// true) to retry, e.g. once the user has joined the fallback AP.
+    func startDiscovery() {
+        guard !isSearching else { return }
+        isSearching = true
+        searchFailed = false
+        lastError = nil
+
+        let params = NWParameters.tcp
+        params.includePeerToPeer = true
+        let browser = NWBrowser(for: .bonjour(type: Self.bonjourServiceType, domain: "local"), using: params)
+        self.browser = browser
+
+        let timeoutTask = DispatchWorkItem { [weak self] in self?.finishDiscovery(address: nil) }
+        discoveryTimeoutTask = timeoutTask
+        netQueue.asyncAfter(deadline: .now() + Self.discoveryTimeout, execute: timeoutTask)
+
+        browser.browseResultsChangedHandler = { [weak self] results, _ in
+            guard let first = results.first else { return }
+            Task { @MainActor in
+                guard let self, self.isSearching else { return }
+                self.resolve(endpoint: first.endpoint)
+            }
+        }
+        browser.start(queue: netQueue)
+    }
+
+    /// Network framework has no API to resolve a Bonjour endpoint to a
+    /// host/port without also connecting (confirmed against Apple's own
+    /// documented guidance, not guessed) -- so this opens a throwaway
+    /// NWConnection purely to read back currentPath.remoteEndpoint once
+    /// it reaches .ready, then immediately cancels it. The real request
+    /// traffic afterward goes through URLSession as normal, using the
+    /// plain host:port string this produces, same as a manually-entered
+    /// address.
+    private func resolve(endpoint: NWEndpoint) {
+        let connection = NWConnection(to: endpoint, using: .tcp)
+        resolveConnection = connection
+        connection.stateUpdateHandler = { [weak self] state in
+            // NWConnection's handler isn't statically MainActor-isolated
+            // (even though netQueue is .main at runtime), so hopping
+            // through a MainActor Task is required to call back into
+            // this otherwise-@MainActor class.
+            switch state {
+            case .ready:
+                let resolved: String?
+                if case let .hostPort(host, port) = connection.currentPath?.remoteEndpoint {
+                    // NWEndpoint.Host's own string form can carry a
+                    // "%en0"-style zone-ID suffix (RFC 4007 scoped-address
+                    // notation, seen even for a plain IPv4 loopback
+                    // address once resolved via a specific interface) --
+                    // not valid in a URL host, and never meaningful here
+                    // since this daemon only ever advertises plain IPv4 A
+                    // records (see mdns_responder.hpp's build_full_response).
+                    let hostString = "\(host)".split(separator: "%").first.map(String.init) ?? "\(host)"
+                    resolved = "\(hostString):\(port)"
+                } else {
+                    resolved = nil
+                }
+                connection.cancel()
+                Task { @MainActor in self?.finishDiscovery(address: resolved) }
+            case .failed, .cancelled:
+                Task { @MainActor in self?.finishDiscovery(address: nil) }
+            default:
+                break
+            }
+        }
+        connection.start(queue: netQueue)
+    }
+
+    private func finishDiscovery(address: String?) {
+        guard isSearching else { return } // already finished (timeout raced a resolve, or vice versa)
+        stopDiscovery()
+        if let address {
+            serverAddress = address
+            connectToServer()
+        } else {
+            searchFailed = true
+        }
+    }
+
+    private func stopDiscovery() {
+        isSearching = false
+        discoveryTimeoutTask?.cancel()
+        discoveryTimeoutTask = nil
+        browser?.cancel()
+        browser = nil
+        resolveConnection?.cancel()
+        resolveConnection = nil
     }
 
     private func startPolling() {
