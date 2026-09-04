@@ -1,17 +1,17 @@
 import SwiftUI
 
 /// Adapted from pi-bluetooth-configuration-client-mac's ContentView.swift --
-/// same screens and BLEManager calls, with iOS-specific adjustments:
+/// same screens and HTTPManager calls, with iOS-specific adjustments:
 ///   - A NavigationStack + toolbar button instead of a free-floating
 ///     "Disconnect" header (there's no titlebar to put it in on iOS).
 ///   - No fixed window frame (macOS-only concept; iOS fills the screen).
-///   - Autocorrection/autocapitalization disabled on the SSID/password/IP
-///     fields -- iOS's default text input behavior actively fights typing
-///     any of those (auto-capitalizing the first letter, offering
-///     spelling "corrections" for a Wi-Fi name), which macOS's plain
-///     NSTextField never did in the first place.
+///   - Autocorrection/autocapitalization disabled on the address/SSID/
+///     password/IP fields -- iOS's default text input behavior actively
+///     fights typing any of those (auto-capitalizing the first letter,
+///     offering spelling "corrections" for a Wi-Fi name), which macOS's
+///     plain NSTextField never did in the first place.
 struct ContentView: View {
-    @EnvironmentObject var ble: BLEManager
+    @EnvironmentObject var http: HTTPManager
     @State private var manualSSID: String = ""
     @State private var password: String = ""
     @State private var localIPField: String = ""
@@ -21,31 +21,20 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
-                if !ble.isBluetoothReady {
-                    Text("Turn on Bluetooth to continue.")
-                        .foregroundStyle(.secondary)
-                } else if !ble.isConnected {
-                    deviceListSection
-                } else if !ble.hasReceivedStatus {
-                    // Neutral placeholder for the brief window between
-                    // connecting and the first Status read/notify actually
-                    // decoding -- otherwise an already-finished Pi could
-                    // flash the wizard's "Scanning for networks" step
-                    // before self-correcting a few seconds later (see
-                    // status_char's periodic re-poll on the daemon side).
-                    ProgressView("Checking status…")
-                } else if ble.status.finished {
+                if !http.isConnected {
+                    addressEntrySection
+                } else if http.status.wifi.finished {
                     connectedDetailsSection
                 } else {
                     wizardSection
                 }
 
-                if let info = ble.lastInfo {
+                if let info = http.lastInfo {
                     Text(info)
                         .foregroundStyle(.green)
                         .font(.footnote)
                 }
-                if let error = ble.lastError {
+                if let error = http.lastError {
                     Text(error)
                         .foregroundStyle(.red)
                         .font(.footnote)
@@ -55,63 +44,47 @@ struct ContentView: View {
             }
             .padding(20)
             .toolbar {
-                if ble.isConnected {
+                if http.isConnected {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Disconnect") { ble.disconnect() }
+                        Button("Disconnect") { http.disconnect() }
                     }
                 }
             }
         }
     }
 
-    // MARK: - Device list
+    // MARK: - Address entry (replaces the old BLE device list)
 
-    private var deviceListSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Nearby Devices").font(.headline)
-                Spacer()
-                Button {
-                    ble.startScan()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
+    private var addressEntrySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Connect to a Pi").font(.headline)
+            Text("Join the Pi's own WiFi network first (its name is its serial number) if it's showing one, then enter its address below. A fresh or unconfigured Pi uses \(HTTPManager.defaultAddress) by default.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            TextField("192.168.5.1:8080", text: $http.serverAddress)
+                .textFieldStyle(.roundedBorder)
+                .keyboardType(.URL)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+
+            Button {
+                http.connectToServer()
+            } label: {
+                if http.isConnecting {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text("Connect")
                 }
-                .help("Rescan")
             }
-
-            if ble.discoveredDevices.isEmpty {
-                Text("Scanning for aipicam devices…")
-                    .foregroundStyle(.secondary)
-            }
-
-            List(ble.discoveredDevices) { device in
-                Button {
-                    ble.connect(to: device)
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(device.name)
-                                .font(.system(.body, design: .monospaced))
-                            Text("RSSI \(device.rssi) dBm")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if ble.isConnecting {
-                            ProgressView().controlSize(.small)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-            .listStyle(.plain)
-            .frame(minHeight: 180)
+            .buttonStyle(.borderedProminent)
+            .disabled(http.isConnecting || http.serverAddress.trimmingCharacters(in: .whitespaces).isEmpty)
         }
     }
 
     // MARK: - Setup finished: post-init details screen
     //
-    // Shown once the wizard is done (ble.status.finished): WiFi/network
+    // Shown once the wizard is done (http.status.wifi.finished): WiFi/network
     // stats, relay controls, and Victron solar/battery telemetry, each
     // behind its own DisclosureGroup rather than stacked flat -- there's
     // a lot of information across the three, so each collapses until
@@ -122,7 +95,7 @@ struct ContentView: View {
     private var connectedDetailsSection: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Connected to \(ble.connectedName ?? "device")")
+                Text("Connected to \(http.serverAddress)")
                     .font(.headline)
 
                 connectivityDisclosure
@@ -130,7 +103,7 @@ struct ContentView: View {
                 solarBatteryDisclosure
 
                 Button("Reset") {
-                    ble.resetNetwork()
+                    http.resetNetwork()
                 }
                 .buttonStyle(.bordered)
             }
@@ -152,22 +125,22 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 16) {
                 GroupBox("WiFi") {
                     VStack(alignment: .leading, spacing: 6) {
-                        LabeledContent("Network", value: ble.status.ssid)
-                        LabeledContent("IP address", value: ble.status.ip)
+                        LabeledContent("Network", value: http.status.wifi.ssid)
+                        LabeledContent("IP address", value: http.status.wifi.ip)
                     }
                     .padding(.top, 4)
                 }
 
                 GroupBox("Local Network") {
                     VStack(alignment: .leading, spacing: 6) {
-                        LabeledContent("Gateway IP", value: ble.ethernetConfig.ip)
-                        LabeledContent("DHCP range", value: "\(rangeAddress(ble.ethernetConfig.rangeStart)) – \(rangeAddress(ble.ethernetConfig.rangeEnd))")
-                        if ble.dhcpLeases.isEmpty {
+                        LabeledContent("Gateway IP", value: http.status.eth.ip)
+                        LabeledContent("DHCP range", value: "\(rangeAddress(http.status.eth.rangeStart)) – \(rangeAddress(http.status.eth.rangeEnd))")
+                        if http.status.leases.isEmpty {
                             Text("No devices connected")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         } else {
-                            ForEach(ble.dhcpLeases) { lease in
+                            ForEach(http.status.leases) { lease in
                                 LabeledContent(lease.hostname.isEmpty ? lease.mac : lease.hostname, value: lease.ip)
                             }
                         }
@@ -189,30 +162,30 @@ struct ContentView: View {
     private var relaysDisclosure: some View {
         DisclosureGroup(isExpanded: $relaysExpanded) {
             Group {
-                if ble.relays.isEmpty {
+                if http.status.relays.isEmpty {
                     Text("No relays configured")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } else {
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(ble.relays) { relay in
-                            let isPending = ble.pendingRelayPorts.contains(relay.port)
+                        ForEach(http.status.relays) { relay in
+                            let isPending = http.pendingRelayPorts.contains(relay.port)
                             HStack {
                                 Toggle(isOn: Binding(
                                     get: { relay.isOn },
-                                    set: { ble.setRelay(port: relay.port, on: $0) }
+                                    set: { http.setRelay(port: relay.port, on: $0) }
                                 )) {
                                     Text(relay.label)
                                 }
                                 .toggleStyle(.switch)
                                 .disabled(relay.state == "unknown" || isPending)
 
-                                // pi-bluetooth-configuration only re-polls and
-                                // republishes relay state on its own 5s cadence,
-                                // so without this the switch would sit
-                                // unconfirmed (or visibly bounce back) for up
-                                // to that long after a tap -- this spinner
-                                // covers that gap instead.
+                                // A relay command's outcome comes back
+                                // directly in the POST /relay response, but
+                                // the daemon retries against
+                                // pi-relay-control-alpine for up to ~10s
+                                // before giving up -- this spinner covers
+                                // that wait.
                                 if isPending {
                                     ProgressView()
                                         .controlSize(.small)
@@ -242,35 +215,35 @@ struct ContentView: View {
     private var solarBatteryDisclosure: some View {
         DisclosureGroup(isExpanded: $solarBatteryExpanded) {
             Group {
-                if !ble.victronStatus.connected {
+                if !http.status.victron.connected {
                     Text("No Victron device connected")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } else {
                     VStack(alignment: .leading, spacing: 6) {
-                        if let device = ble.victronStatus.device {
+                        if let device = http.status.victron.device {
                             LabeledContent("Device", value: device.name)
                             LabeledContent("Serial", value: device.serial)
                         }
-                        if let v = ble.victronStatus.V {
+                        if let v = http.status.victron.V {
                             LabeledContent("Battery Voltage", value: String(format: "%.2f V", v))
                         }
-                        if let i = ble.victronStatus.I {
+                        if let i = http.status.victron.I {
                             LabeledContent("Battery Current", value: formattedBatteryCurrent(i))
                         }
-                        if let vpv = ble.victronStatus.VPV {
+                        if let vpv = http.status.victron.VPV {
                             LabeledContent("Solar Voltage", value: String(format: "%.2f V", vpv))
                         }
-                        if let ppv = ble.victronStatus.PPV {
+                        if let ppv = http.status.victron.PPV {
                             LabeledContent("Solar Input", value: String(format: "%.0f W", ppv))
                         }
-                        if let csName = ble.victronStatus.CSName {
+                        if let csName = http.status.victron.CSName {
                             LabeledContent("Charge State", value: csName)
                         }
-                        if let errName = ble.victronStatus.ERRName {
+                        if let errName = http.status.victron.ERRName {
                             LabeledContent("Error", value: errName)
                         }
-                        if let h20 = ble.victronStatus.H20 {
+                        if let h20 = http.status.victron.H20 {
                             LabeledContent("Yield Today", value: String(format: "%.2f kWh", h20))
                         }
                     }
@@ -301,7 +274,7 @@ struct ContentView: View {
     }
 
     private func rangeAddress(_ lastOctet: Int) -> String {
-        let ip = ble.ethernetConfig.ip
+        let ip = http.status.eth.ip
         guard let dot = ip.lastIndex(of: ".") else { return "\(lastOctet)" }
         return "\(ip[ip.startIndex..<dot]).\(lastOctet)"
     }
@@ -310,10 +283,10 @@ struct ContentView: View {
 
     private var wizardSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Connected to \(ble.connectedName ?? "device")")
+            Text("Connected to \(http.serverAddress)")
                 .font(.headline)
 
-            switch ble.wizardStep {
+            switch http.wizardStep {
             case .scanning:
                 scanningStep
             case .pickNetwork:
@@ -341,22 +314,22 @@ struct ContentView: View {
                 Text("Choose a Network").font(.headline)
                 Spacer()
                 Button {
-                    ble.rescan()
+                    http.rescan()
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
                 .help("Rescan")
             }
 
-            if ble.scanResults.isEmpty {
+            if http.status.scan.isEmpty {
                 Text("No networks found.")
                     .foregroundStyle(.secondary)
             }
 
-            List(ble.scanResults) { result in
+            List(http.status.scan) { result in
                 Button {
                     password = ""
-                    ble.selectNetwork(ssid: result.ssid)
+                    http.selectNetwork(ssid: result.ssid)
                 } label: {
                     HStack {
                         Text(result.ssid)
@@ -373,7 +346,7 @@ struct ContentView: View {
             Button("Enter Network Manually") {
                 manualSSID = ""
                 password = ""
-                ble.selectNetwork(ssid: "")
+                http.selectNetwork(ssid: "")
             }
         }
     }
@@ -382,7 +355,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Button {
-                    ble.backToNetworkList()
+                    http.backToNetworkList()
                 } label: {
                     Image(systemName: "chevron.left")
                 }
@@ -400,14 +373,14 @@ struct ContentView: View {
             SecureField("Password (leave blank for an open network)", text: $password)
                 .textFieldStyle(.roundedBorder)
 
-            if ble.status.state == "connecting" || ble.status.state == "failed" {
+            if http.status.wifi.state == "connecting" || http.status.wifi.state == "failed" {
                 statusBadge
             }
 
             Button("Connect") {
-                ble.connectToNetwork(ssid: ssid.isEmpty ? manualSSID : ssid, password: password)
+                http.connectToNetwork(ssid: ssid.isEmpty ? manualSSID : ssid, password: password)
             }
-            .disabled((ssid.isEmpty ? manualSSID : ssid).isEmpty || ble.status.state == "connecting")
+            .disabled((ssid.isEmpty ? manualSSID : ssid).isEmpty || http.status.wifi.state == "connecting")
             .buttonStyle(.borderedProminent)
         }
     }
@@ -444,18 +417,18 @@ struct ContentView: View {
             }
 
             Button("Finish") {
-                let start = Int(rangeStartField) ?? ble.ethernetConfig.rangeStart
-                let end = Int(rangeEndField) ?? ble.ethernetConfig.rangeEnd
-                ble.setLocalNetworkConfig(ip: localIPField, rangeStart: start, rangeEnd: end)
-                ble.finishSetup()
+                let start = Int(rangeStartField) ?? http.status.eth.rangeStart
+                let end = Int(rangeEndField) ?? http.status.eth.rangeEnd
+                http.setLocalNetworkConfig(ip: localIPField, rangeStart: start, rangeEnd: end)
+                http.finishSetup()
             }
             .disabled(!isValidIPv4(localIPField) || Int(rangeStartField) == nil || Int(rangeEndField) == nil)
             .buttonStyle(.borderedProminent)
         }
         .onAppear {
-            if localIPField.isEmpty { localIPField = ble.ethernetConfig.ip }
-            if rangeStartField.isEmpty { rangeStartField = String(ble.ethernetConfig.rangeStart) }
-            if rangeEndField.isEmpty { rangeEndField = String(ble.ethernetConfig.rangeEnd) }
+            if localIPField.isEmpty { localIPField = http.status.eth.ip }
+            if rangeStartField.isEmpty { rangeStartField = String(http.status.eth.rangeStart) }
+            if rangeEndField.isEmpty { rangeEndField = String(http.status.eth.rangeEnd) }
         }
     }
 
@@ -485,7 +458,7 @@ struct ContentView: View {
     }
 
     private var statusColor: Color {
-        switch ble.status.state {
+        switch http.status.wifi.state {
         case "connecting": return .yellow
         case "failed":     return .red
         default:           return .gray
@@ -493,11 +466,11 @@ struct ContentView: View {
     }
 
     private var statusText: String {
-        switch ble.status.state {
+        switch http.status.wifi.state {
         case "connecting":
-            return "Connecting to \(ble.status.ssid)…"
+            return "Connecting to \(http.status.wifi.ssid)…"
         case "failed":
-            return "Failed: \(ble.status.error)"
+            return "Failed: \(http.status.wifi.error)"
         default:
             return ""
         }

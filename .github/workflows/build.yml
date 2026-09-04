@@ -13,10 +13,10 @@ permissions:
 
 jobs:
   build:
-    # Needs a real Xcode toolchain (SwiftUI/CoreBluetooth headers, the iOS
-    # SDK) -- unlike the Alpine daemons in this project family, there's no
-    # Docker shortcut for that, so this runs on GitHub's hosted macOS
-    # runner, same as pi-bluetooth-configuration-client-mac's build.
+    # Needs a real Xcode toolchain (SwiftUI headers, the iOS SDK) --
+    # unlike the Alpine daemons in this project family, there's no Docker
+    # shortcut for that, so this runs on GitHub's hosted macOS runner,
+    # same as pi-bluetooth-configuration-client-mac's build.
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,8 +33,9 @@ jobs:
       - name: Build for iOS Simulator
         # Compile check against the Simulator SDK first, cheaper and
         # faster to fail on than a full device archive below. The
-        # Simulator has no Bluetooth radio at all, so this only ever
-        # verifies the app builds, not that it talks to a Pi.
+        # Simulator shares the runner's own network rather than joining a
+        # Pi's fallback AP, so this only ever verifies the app builds,
+        # not that it talks to a real Pi.
         run: |
           xcodebuild -project Aipicam.xcodeproj -scheme Aipicam \
             -destination 'generic/platform=iOS Simulator' \

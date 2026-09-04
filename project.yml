@@ -33,8 +33,8 @@ targets:
     # every `xcodegen generate` -- it does NOT merge with hand-edited
     # content there (learned the hard way: an earlier version of this
     # file pointed at a manually-written Info.plist, and generating
-    # silently clobbered it, NSBluetoothAlwaysUsageDescription included --
-    # which would have made the app crash on first Bluetooth access with
+    # silently clobbered it, a usage-description key included -- which
+    # would have made the app crash on first access to the gated API with
     # no indication why). So the actual plist content lives here, in
     # "properties", not in a separately maintained file.
     info:
@@ -46,14 +46,21 @@ targets:
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        NSBluetoothAlwaysUsageDescription: >-
-          Used to discover and configure an aipicam device's WiFi over Bluetooth LE.
+        # This app talks plain HTTP to a Pi on the local network (see
+        # HTTPManager.swift) -- iOS gates outgoing connections to private/
+        # local IP ranges behind a runtime permission prompt on iOS 14+,
+        # and requires this description string to be present at all
+        # before it'll even show that prompt rather than just failing the
+        # connection silently.
+        NSLocalNetworkUsageDescription: >-
+          Used to configure an aipicam device's WiFi and view its status over your local network.
         # Answers App Store Connect's export-compliance question ("What
         # type of encryption algorithms does your app implement?") at
         # build time instead of it being asked -- and blocking TestFlight
-        # availability -- on every single upload. False is accurate: BLE
-        # traffic here is deliberately unencrypted (see README, "Security
-        # model"), and the app makes no HTTPS/TLS calls of its own.
+        # availability -- on every single upload. False is accurate: this
+        # app's HTTP traffic to the Pi is deliberately unencrypted (see
+        # the daemon's README, "Security model"), and the app makes no
+        # HTTPS/TLS calls of its own.
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UIRequiresFullScreen: false
@@ -70,18 +77,12 @@ targets:
       base:
         PRODUCT_NAME: aipicam
         PRODUCT_BUNDLE_IDENTIFIER: com.jacohanekom.aipicam
-        # Swift 5 language mode, not 6 -- same reason
-        # pi-bluetooth-configuration-client-mac's Package.swift pins
-        # .swiftLanguageMode(.v5): CBUUID (and [CBUUID]) isn't Sendable,
-        # so Swift 6's strict concurrency checking flags every "static
-        # let ...UUID = CBUUID(...)" in Models.swift as unsafe shared
-        # mutable state. They're actually fine -- CBUUID is immutable in
-        # practice -- but that's not something the compiler can see on
-        # its own, and there's no annotation on our side that fixes it
-        # (the type itself would need to be marked Sendable upstream in
-        # CoreBluetooth). Building against the Swift 6 *toolchain* is
-        # still fine; only the language mode's concurrency strictness
-        # needs to step back to 5.
+        # Swift 5 language mode, not 6 -- matches
+        # pi-bluetooth-configuration-client-mac's Package.swift
+        # (.swiftLanguageMode(.v5)). No longer forced by CoreBluetooth's
+        # non-Sendable CBUUID (that dependency is gone -- see
+        # HTTPManager.swift), just left as-is to avoid taking on Swift 6's
+        # stricter concurrency checking as part of an unrelated change.
         SWIFT_VERSION: "5"
         TARGETED_DEVICE_FAMILY: "1,2" # iPhone + iPad
         GENERATE_INFOPLIST_FILE: NO
