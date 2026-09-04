@@ -1,55 +1,71 @@
 # pi-bluetooth-configuration-client-ios
 
 **aipicam** -- an iOS app to configure WiFi on a Raspberry Pi running
-[pi-bluetooth-configuration](https://github.com/jacohanekom/pi-bluetooth-configuration-alpine)
-over Bluetooth LE, using the iPhone/iPad's own Bluetooth radio. This
-started as the iOS counterpart to a macOS client
-(`pi-bluetooth-configuration-client-mac`, now retired -- a phone in your
-pocket covers the same provisioning need without requiring a Mac, so
-there was no reason to keep maintaining both): same GATT protocol, same
-screens, same feature set, just with iOS-appropriate chrome (a
-`NavigationStack` instead of a free-floating window titlebar button, no
-fixed window size, autocorrection/autocapitalization turned off on the
-SSID/password/IP fields since iOS defaults to fighting all three).
+[pi-bluetooth-configuration](https://github.com/jacohanekom/pi-bluetooth-configuration-alpine),
+talking plain HTTP/JSON over the phone's own WiFi connection -- to the
+Pi's fallback access point while it's unconfigured, or to the Pi
+directly once it's joined a real network. This started as the iOS
+counterpart to a macOS client (`pi-bluetooth-configuration-client-mac`,
+now retired -- a phone in your pocket covers the same provisioning need
+without requiring a Mac, so there was no reason to keep maintaining
+both): same HTTP API, same screens, same feature set, just with
+iOS-appropriate chrome (a `NavigationStack` instead of a free-floating
+window titlebar button, no fixed window size, autocorrection/
+autocapitalization turned off on the address/SSID/password/IP fields
+since iOS defaults to fighting all three).
 
-Scans for nearby devices (shown by hardware serial number, so multiple
-units are distinguishable), connects (no pairing -- see Security below),
-and walks through a wizard: pick a WiFi network, enter its password,
-confirm eth0's local network (gateway IP + DHCP range), then finish --
-no SSH, no keyboard on the Pi. Once setup is finished, a details screen
+Finds the Pi automatically on launch (mDNS/Bonjour -- see "Discovery"
+below) and walks through a wizard: pick a WiFi network, enter its
+password, confirm eth0's local network (gateway IP + DHCP range), then
+finish -- no SSH, no keyboard on the Pi. If nothing's found (nothing set
+up yet, or the Pi couldn't join your WiFi), the app tells you to join its
+own fallback access point instead (its own WiFi network, named after its
+serial number, defaulting to `192.168.5.1:8080` -- the same setup-AP
+pattern any headless IoT device uses) and search again; manual address
+entry is always available too. Once setup is finished, a details screen
 shows WiFi/network stats, relay controls, and Victron solar/battery
 telemetry behind three collapsible sections -- see "Using it" below for
 the exact walkthrough.
 
-Built with SwiftUI + CoreBluetooth.
+Built with SwiftUI + URLSession + Network (`NWBrowser`/`NWConnection` for
+discovery) -- no CoreBluetooth, no third-party dependency of any kind
+(see git history for the earlier BLE-based revision this replaced).
 
 This is a one-shot provisioning flow, not a managed session: the Pi
 reboots itself a few seconds after **Finish** or a reset (see the
-daemon's README, "One-shot provisioning and reboot behavior"). This app
-doesn't try to keep managing anything over the network once that
-happens, and treats the BLE disconnect that follows the reboot as
-expected, not an error.
+daemon's README, "One-shot provisioning and reboot behavior"), and a
+successful **Connect** that started from the fallback AP reboots
+immediately, no separate Finish step -- this radio can't run the AP and
+a real network at once, so joining a new network necessarily means the
+address this app was just using stops working. This app doesn't try to
+keep managing anything once that happens; it surfaces it plainly instead
+of pretending to recover, and sends you back to entering an address once
+the Pi (hopefully) comes back up elsewhere.
 
 ## Security
 
 There is no pairing, encryption, or authentication anywhere in this
-flow. WiFi SSID and password cross BLE in the clear to any device that
-connects while the Pi is advertising. This was a deliberate choice made
-after BLE pairing/bonding proved unreliable on the Pi 3's hardware (see
-the daemon's README, "Security model", for the full reasoning). Use this
-only on a trusted home/lab network, during a provisioning window you
-control.
+flow. The Pi's fallback AP is open (no password), and every HTTP request
+this app makes is plain, unencrypted HTTP -- WiFi SSID and password
+cross both in the clear to anyone in range or on the same network during
+the provisioning window. This is a deliberate choice, not an oversight
+(see the daemon's README, "Security model", for the full reasoning). Use
+this only on a trusted home/lab network, during a provisioning window
+you control.
 
 ## Requirements
 
-- iOS/iPadOS 16 or later, with Bluetooth on
-- A Pi running `pi-bluetooth-configuration`, advertising and reachable
+- iOS/iPadOS 16 or later, with WiFi on
+- A Pi running `pi-bluetooth-configuration`, reachable either via its
+  fallback AP or on a real network
 - To build: Xcode 15+ and [XcodeGen](https://github.com/yonaskolb/XcodeGen)
   (`brew install xcodegen`)
-- To run on a real device (required -- the iOS Simulator has no
-  Bluetooth radio at all): an Apple ID signed into Xcode for free
-  automatic signing, or a paid Apple Developer Program membership for
-  distributing beyond your own devices
+- Runs fine in the iOS Simulator for a compile check, but the Simulator
+  shares the Mac's own network rather than joining a Pi's fallback AP, so
+  actually talking to a Pi needs a real device on the same WiFi network
+  as it: an Apple ID signed into Xcode for free automatic signing, or a
+  paid Apple Developer Program membership for distributing beyond your
+  own devices
 
 ## Download a prebuilt .ipa (unsigned -- resign before installing)
 
@@ -111,8 +127,8 @@ Connect login:
    label, not user-facing), Bundle ID **Explicit** →
    `com.jacohanekom.aipicam` (must match `project.yml`'s
    `PRODUCT_BUNDLE_IDENTIFIER` exactly). Leave every capability
-   unchecked -- Bluetooth needs no App ID capability, just the
-   `NSBluetoothAlwaysUsageDescription` string already in `Info.plist`.
+   unchecked -- local network access needs no App ID capability, just the
+   `NSLocalNetworkUsageDescription` string already in `Info.plist`.
    Continue → Register.
 2. **Create the app record in App Store Connect**:
    [appstoreconnect.apple.com](https://appstoreconnect.apple.com) → Apps
@@ -180,10 +196,10 @@ ship without one because a plain `swift build` produces a real, runnable
 macOS executable on its own. iOS has no equivalent: there's no SPM
 product type for an installable, signed `.app`, and none of the leniency
 macOS extends to a bare, unsigned CLI binary (that Mac client's trick of
-embedding `NSBluetoothAlwaysUsageDescription` straight into the
-executable's `__info_plist` section doesn't have an iOS counterpart --
-iOS enforces real app-bundle and code-signing rules unconditionally). An
-Xcode project is unavoidable here.
+embedding usage-description strings straight into the executable's
+`__info_plist` section doesn't have an iOS counterpart -- iOS enforces
+real app-bundle and code-signing rules unconditionally). An Xcode
+project is unavoidable here.
 
 [`project.yml`](project.yml) is the checked-in source of truth instead --
 a small, readable, diffable spec that [XcodeGen](https://github.com/yonaskolb/XcodeGen)
@@ -192,14 +208,17 @@ stays out of git, same principle as before, just one level removed.
 
 ## Using it
 
-1. Launch the app. It scans automatically for devices advertising the
-   WiFi-configuration GATT service and lists them by hardware serial
-   number.
-2. Tap a device to connect -- no pairing step, connecting is enough
-   (see Security above for what that trades away). If the link drops
-   unexpectedly (the Pi 3's Bluetooth hardware has known stability
-   issues independent of pairing), the app retries automatically (up to
-   3 times, 1s apart) before surfacing an error.
+1. Launch the app. It searches automatically (mDNS/Bonjour -- see
+   "Discovery" below) for a few seconds; if a Pi is found, it connects
+   straight to it, no tap needed.
+2. **If nothing's found** (nothing set up yet, the Pi couldn't join your
+   WiFi, or you're just not on the same network as it yet): join its
+   fallback access point in the iOS Settings app -- **Settings → WiFi**,
+   look for a network named after the Pi's hardware serial number, join
+   it (no password) -- then tap **Search Again** in the app. Manual
+   address entry (prefilled with `192.168.5.1:8080`, the fallback AP's
+   default) is always available too, if you'd rather skip searching or
+   already know the Pi's address on a real network.
 3. **If setup already finished on this Pi**, you land straight on the
    details screen (see step 9 below for what's on it). Skip to step 8.
 4. **Otherwise**, a wizard starts automatically:
@@ -208,23 +227,35 @@ stays out of git, same principle as before, just one level removed.
      network.
 5. Enter the password (leave blank for an open network) and tap
    **Connect**. A status line shows live progress
-   (`connecting` → `connected`/`failed`); on failure, edit and retry, or
-   tap **◀** to go back to the network list and try a different one.
-6. Once WiFi joins, the wizard moves to **Local Network Configuration**:
-   `eth0` already has a working gateway IP and DHCP server (it's always
-   on, from the moment the Pi first boots -- see the daemon's README,
-   "Ethernet direct-connect"), prefilled here so you can just confirm
-   it, or change the IP/DHCP range if you'd like something different.
+   (`connecting` → `connected`/`failed`) for as long as the app can
+   still reach the Pi. **If the Pi was on its fallback AP**, expect to
+   lose that connection entirely partway through -- joining the new
+   network tears the AP down, since this radio can't run both at once.
+   The app says so plainly and sends you back to address entry, which
+   searches again automatically; rejoin your regular WiFi and wait a
+   moment for the Pi to finish joining and re-advertise itself there
+   (skipping straight to the details screen if it joined successfully --
+   see step 9). **If the Pi was already on a real network**
+   (reconfiguring), the connection normally survives and the wizard
+   continues below.
+6. Once WiFi joins (without the AP having been involved), the wizard
+   moves to **Local Network Configuration**: `eth0` already has a
+   working gateway IP and DHCP server (it's always on, from the moment
+   the Pi first boots -- see the daemon's README, "Ethernet
+   direct-connect"), prefilled here so you can just confirm it, or
+   change the IP/DHCP range if you'd like something different.
 7. Tap **Finish**. This is what actually concludes setup and reboots
-   the Pi a few seconds later -- the BLE connection dropping is
-   expected, not an error. Reconnecting afterward lands on the details
-   screen described next.
+   the Pi a few seconds later -- losing the connection is expected, not
+   an error; the app reconnects to the same address automatically once
+   the Pi is back up, landing on the details screen described next.
 8. **Reset** removes the network the Pi last configured and reboots it
-   the same way (this sends the same `forget` command the daemon's GATT
-   protocol always had -- "Reset" is just how this app labels it). Only
-   shown once setup has finished: resetting only makes sense once
-   there's something to reset. Local network settings aren't touched by
-   Reset and become editable again once the wizard restarts.
+   the same way (this sends the same `/forget` request the daemon's API
+   always had -- "Reset" is just how this app labels it). The Pi comes
+   back up in fallback-AP mode afterward (nothing is configured anymore)
+   -- rejoin that AP and search again, same as step 2. Only shown once
+   setup has finished: resetting only makes sense once there's something
+   to reset. Local network settings aren't touched by Reset and become
+   editable again once the wizard restarts.
 9. The post-setup details screen has three collapsible sections (tap
    each to expand/collapse -- **Connectivity** starts open, the other
    two start collapsed since there's a lot to show across all three):
@@ -261,29 +292,76 @@ brew install xcodegen   # one-time
 make open               # generates Aipicam.xcodeproj and opens it
 ```
 
-Then in Xcode: pick your iPhone/iPad as the run destination (not a
-Simulator -- see Requirements above), select your team under Signing &
-Capabilities if this is the first time, and Run.
+Then in Xcode: pick your iPhone/iPad as the run destination (see
+Requirements above for why a Simulator run can't actually reach a Pi's
+fallback AP), select your team under Signing & Capabilities if this is
+the first time, and Run.
 
 `make build` builds for the Simulator with code signing disabled --
-useful as a quick compile check, but the resulting build can't actually
-talk to a Pi (no Bluetooth radio in the Simulator). `make generate`
-regenerates `Aipicam.xcodeproj` from `project.yml` without building or
-opening anything; `make clean` removes it again along with `DerivedData`.
+useful as a quick compile check. Unlike Bluetooth, the Simulator *can*
+meaningfully exercise this app's networking, since it shares the Mac's
+own network stack: pointed at a Pi's real address it can complete actual
+HTTP requests, and mDNS discovery works too if the Mac itself is on the
+same network as a Pi (it can't join a Pi's fallback AP itself, of
+course, since that's a real WiFi join). `make generate` regenerates
+`Aipicam.xcodeproj` from `project.yml` without building or opening
+anything; `make clean` removes it again along with `DerivedData`.
+
+## Discovery
+
+Finds a Pi automatically via mDNS/Bonjour: `HTTPManager.swift`'s
+`startDiscovery()` browses for "_aipicam._tcp" (the service the daemon
+advertises -- see pi-bluetooth-configuration-alpine's README,
+"Discovery") using `NWBrowser`, then resolves the first match to a real
+host:port with a throwaway `NWConnection` (Network framework has no
+"resolve without connecting" API for Bonjour endpoints -- confirmed
+against Apple's own documented guidance, not guessed) before handing
+that address to the same `connectToServer()` a manually-typed address
+goes through.
+
+Runs automatically once, for a few seconds, whenever the address-entry
+screen appears (app launch, or returning to it after a disconnect); a
+match connects immediately with no tap needed, and "Search Again" on the
+resulting "No Pi found" screen re-runs it on demand. Manual address
+entry stays available the whole time as a fallback -- for the rare
+network that blocks mDNS multicast, or if nothing was found in time.
+
+**Verified against a real (test) mDNS advertisement**: this discovery
+code was run in the iOS Simulator (which shares the Mac's own network,
+so it could actually reach a real mDNS responder) against a standalone
+instance of pi-bluetooth-configuration-alpine's own `mdns_responder.hpp`
+advertising a fake service, confirming the full browse → resolve →
+connect path produces a correct, usable address end-to-end -- not just
+that it compiles. One real bug this actually caught:
+`NWEndpoint.Host`'s string form can carry a `%en0`-style zone-ID suffix
+that isn't valid in a URL host, stripped explicitly in `resolve()` as a
+result.
 
 ## Protocol
 
-Talks directly to the GATT service documented in
+Talks directly to the HTTP API documented in
 [pi-bluetooth-configuration-alpine's README](https://github.com/jacohanekom/pi-bluetooth-configuration-alpine)
--- `Models.swift` has the exact UUIDs and JSON shapes. This client
-doesn't add any protocol of its own.
+("HTTP API") -- `Models.swift` has the exact JSON shapes,
+`HTTPManager.swift` the routes it calls. This client doesn't add any
+protocol of its own; the last-used address is remembered (`UserDefaults`)
+so relaunching after setup reuses it automatically (discovery, if it
+finds the same Pi again first, will overwrite it with a freshly-resolved
+one anyway).
 
 ## Known limitations (v1)
 
-- One connection at a time -- connecting to a new device disconnects
-  the previous one.
-- No persisted list of previously-seen Pis; every launch re-scans.
-- No pairing/encryption at all -- see Security above.
+- One server address at a time -- connecting to a new one disconnects
+  from the previous one. No persisted list of previously-seen Pis.
+- Discovery only ever acts on the *first* match found -- if more than
+  one aipicam Pi is on the same network, there's no picker; whichever
+  one answers first wins. Rare in practice (this is a single-device
+  setup tool), but worth knowing if you're provisioning several at once.
+- No automatic recovery from an address change *mid-connection*: if the
+  Pi's fallback AP disappears mid-setup (see "Using it" above) or a
+  Reset puts it back into AP mode, the app doesn't keep watching for it
+  to reappear -- you return to the address-entry screen and search
+  again (or enter its address manually) once it's back.
+- No authentication or encryption at all -- see Security above.
 - CI's `aipicam-unsigned.ipa` (see "Download a prebuilt .ipa" above) is
   genuinely unsigned -- resign it yourself with a sideloading tool
   before it'll install, or use the TestFlight workflow below instead if
