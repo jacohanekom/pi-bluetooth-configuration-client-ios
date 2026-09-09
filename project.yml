@@ -54,6 +54,17 @@ targets:
         # connection silently.
         NSLocalNetworkUsageDescription: >-
           Used to configure an aipicam device's WiFi and view its status over your local network.
+        # Required *in addition to* NSLocalNetworkUsageDescription above,
+        # specifically for Bonjour/mDNS browsing (HTTPManager.swift's
+        # NWBrowser-based auto-discovery) to work at all on a real device
+        # -- without this exact service-type string listed here, iOS
+        # doesn't even show the local-network permission prompt, it just
+        # silently returns zero browse results forever. The Simulator
+        # doesn't enforce this the same way, which is exactly why this
+        # was missed during Simulator-only verification of the discovery
+        # feature. Must match HTTPManager.bonjourServiceType exactly.
+        NSBonjourServices:
+          - _aipicam._tcp
         # Answers App Store Connect's export-compliance question ("What
         # type of encryption algorithms does your app implement?") at
         # build time instead of it being asked -- and blocking TestFlight
