@@ -14,6 +14,7 @@ struct ContentView: View {
     @EnvironmentObject var http: HTTPManager
     @State private var manualSSID: String = ""
     @State private var password: String = ""
+    @State private var isPasswordVisible = false
     @State private var localIPField: String = ""
     @State private var rangeStartField: String = ""
     @State private var rangeEndField: String = ""
@@ -84,13 +85,15 @@ struct ContentView: View {
             Button {
                 http.connectToServer()
             } label: {
-                if http.isConnecting {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("Connect")
+                Group {
+                    if http.isConnecting {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Connect")
+                    }
                 }
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .disabled(http.isConnecting || http.serverAddress.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -412,8 +415,25 @@ struct ContentView: View {
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
             }
-            SecureField("Password (leave blank for an open network)", text: $password)
-                .textFieldStyle(.roundedBorder)
+            HStack {
+                Group {
+                    if isPasswordVisible {
+                        TextField("Password (leave blank for an open network)", text: $password)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                    } else {
+                        SecureField("Password (leave blank for an open network)", text: $password)
+                    }
+                }
+                Button {
+                    isPasswordVisible.toggle()
+                } label: {
+                    Image(systemName: isPasswordVisible ? "eye.slash" : "eye")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+            .textFieldStyle(.roundedBorder)
 
             if http.status.wifi.state == "connecting" || http.status.wifi.state == "failed" {
                 statusBadge
@@ -422,13 +442,15 @@ struct ContentView: View {
             Button {
                 http.connectToNetwork(ssid: ssid.isEmpty ? manualSSID : ssid, password: password)
             } label: {
-                if http.isConnectingToNetwork {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("Connect")
+                Group {
+                    if http.isConnectingToNetwork {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Connect")
+                    }
                 }
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
             .disabled((ssid.isEmpty ? manualSSID : ssid).isEmpty || http.isConnectingToNetwork)
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
