@@ -358,7 +358,23 @@ final class HTTPManager: ObservableObject {
     func rescan() {
         lastError = nil
         wizardStep = .scanning
-        Task { await self.post(path: "scan") }
+        Task {
+            await self.post(path: "scan")
+            // No server push here (see this file's header comment) --
+            // the old BLE-era client advanced past the scanning spinner
+            // when a scan-results *notification* arrived; there's no HTTP
+            // equivalent, so instead this just waits long enough for the
+            // daemon's own scan to finish (a fixed ~4s sleep-then-fetch,
+            // see pi-bluetooth-configuration-alpine's wifi_control.hpp)
+            // plus a margin for this client's own 3s poll interval to
+            // have caught the results at least once, then shows whatever
+            // GET /status has by then -- an empty list if nothing was
+            // found, same as the daemon reports it.
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            if self.wizardStep == .scanning {
+                self.wizardStep = .pickNetwork
+            }
+        }
     }
 
     /// User tapped a network in the picker (or chose to enter one
