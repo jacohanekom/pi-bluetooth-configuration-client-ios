@@ -148,14 +148,10 @@ struct ContentView: View {
                 relaysDisclosure
                 solarBatteryDisclosure
 
-                if showResetConfirmation {
-                    resetConfirmation
-                } else {
-                    Button("Reset") {
-                        showResetConfirmation = true
-                    }
-                    .buttonStyle(.bordered)
+                Button("Reset") {
+                    showResetConfirmation = true
                 }
+                .buttonStyle(.bordered)
             }
             // ScrollView proposes its own width to this VStack, but doesn't
             // clip content that ends up wider than that (e.g. a long relay
@@ -164,14 +160,23 @@ struct ContentView: View {
             // switch can't render past the screen's visible edge.
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // A genuine pushed screen (not an inline swap in the same list)
+        // -- "No" and the system back button both just toggle this same
+        // binding back to false, which NavigationStack treats as "pop",
+        // landing back on this exact details screen either way.
+        .navigationDestination(isPresented: $showResetConfirmation) {
+            resetConfirmationScreen
+        }
     }
 
     // MARK: - Reset confirmation
 
-    private var resetConfirmation: some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private var resetConfirmationScreen: some View {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Are you sure you wish to reset the device?")
-                .font(.subheadline)
+                .font(.title3)
+
+            Spacer()
 
             Button {
                 showResetConfirmation = false
@@ -191,6 +196,9 @@ struct ContentView: View {
             .buttonStyle(.bordered)
             .controlSize(.large)
         }
+        .padding(20)
+        .navigationTitle("Reset Device")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     // MARK: - Connectivity (WiFi + Local Network)
