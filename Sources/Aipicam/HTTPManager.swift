@@ -87,6 +87,13 @@ final class HTTPManager: ObservableObject {
     @Published private(set) var isConnected = false
     @Published private(set) var status: StatusResponse = .empty
     @Published private(set) var wizardStep: WizardStep = .scanning
+    // True from the moment connectToNetwork() is tapped until the
+    // attempt concludes (wifi.state reaches "connected" or "failed") --
+    // covers the gap before the next GET /status poll would otherwise
+    // reflect "connecting" on its own, so the UI can disable the whole
+    // password step and show a spinner immediately on tap, not up to
+    // pollInterval seconds later.
+    @Published private(set) var isConnectingToNetwork = false
     // Ports with a POST /relay in flight -- unlike the old BLE-era retry
     // loop (which had to guess whether a write ever reached the daemon at
     // all), an HTTP response is a definitive answer, so this is purely
@@ -325,6 +332,12 @@ final class HTTPManager: ObservableObject {
 
     private func applyStatus(_ decoded: StatusResponse) {
         status = decoded
+        if decoded.wifi.state == "connected" || decoded.wifi.state == "failed" {
+            // The in-flight attempt (if any) has concluded either way --
+            // re-enable the password step's controls so a failure can be
+            // retried, or move on below on success.
+            isConnectingToNetwork = false
+        }
         if decoded.wifi.finished {
             // Already fully provisioned -- nothing wizard-related to do,
             // ContentView shows the final details screen.
@@ -342,6 +355,7 @@ final class HTTPManager: ObservableObject {
     private func resetConnectionState() {
         isConnected = false
         isConnecting = false
+        isConnectingToNetwork = false
         status = .empty
         wizardStep = .scanning
         pendingRelayPorts.removeAll()
@@ -401,6 +415,7 @@ final class HTTPManager: ObservableObject {
     /// connection actually drops, sends the user back to address entry.
     func connectToNetwork(ssid: String, password: String) {
         lastError = nil
+        isConnectingToNetwork = true
         let startedFromAP = status.apActive
         expectDisconnect = true
         if startedFromAP {
@@ -410,7 +425,10 @@ final class HTTPManager: ObservableObject {
             expectDisconnectMessage = "Attempting to join \"\(ssid)\". If your phone loses its connection to the Pi, reconnect to the same network as the Pi and re-enter its address to continue."
             addressAfterDisconnect = nil
         }
-        Task { await self.post(path: "connect", body: ["ssid": ssid, "password": password]) }
+        Task {
+            let ok = await self.post(path: "connect", body: ["ssid": ssid, "password": password])
+            if !ok { self.isConnectingToNetwork = false }
+        }
     }
 
     // Labeled "Reset" in the UI; the wire route is still "/forget" --
@@ -505,10 +523,17 @@ final class HTTPManager: ObservableObject {
 
     private struct OkResponse: Decodable { var ok: Bool }
 
-    private func post(path: String, body: [String: Any]? = nil) async {
+    /// Returns whether the request actually reached the daemon and was
+    /// accepted -- most callers fire-and-forget this (the daemon's own
+    /// async follow-through, tracked via polling, is what matters), but
+    /// connectToNetwork() uses it to know whether to clear
+    /// isConnectingToNetwork immediately on a transport-level failure
+    /// rather than leaving the UI looking busy for nothing.
+    @discardableResult
+    private func post(path: String, body: [String: Any]? = nil) async -> Bool {
         guard let base = baseURL() else {
             lastError = "Not connected"
-            return
+            return false
         }
         do {
             var request = URLRequest(url: base.appendingPathComponent(path))
@@ -522,10 +547,13 @@ final class HTTPManager: ObservableObject {
             if let decoded = try? JSONDecoder().decode(OkResponse.self, from: data), !decoded.ok {
                 lastError = "The Pi rejected that request."
                 expectDisconnect = false
+                return false
             }
+            return true
         } catch {
             expectDisconnect = false
             lastError = "Couldn't reach the Pi -- check your connection and try again."
+            return false
         }
     }
 

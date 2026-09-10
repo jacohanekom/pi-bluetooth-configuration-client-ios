@@ -90,9 +90,12 @@ struct ContentView: View {
                     Text("Connect")
                 }
             }
+            .frame(maxWidth: .infinity)
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .disabled(http.isConnecting || http.serverAddress.trimmingCharacters(in: .whitespaces).isEmpty)
         }
+        .disabled(http.isConnecting)
         .task {
             http.startDiscovery()
         }
@@ -416,12 +419,25 @@ struct ContentView: View {
                 statusBadge
             }
 
-            Button("Connect") {
+            Button {
                 http.connectToNetwork(ssid: ssid.isEmpty ? manualSSID : ssid, password: password)
+            } label: {
+                if http.isConnectingToNetwork {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text("Connect")
+                }
             }
-            .disabled((ssid.isEmpty ? manualSSID : ssid).isEmpty || http.status.wifi.state == "connecting")
+            .frame(maxWidth: .infinity)
+            .disabled((ssid.isEmpty ? manualSSID : ssid).isEmpty || http.isConnectingToNetwork)
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
         }
+        // Disables every control on this step (back button, text fields,
+        // the Connect button itself) for as long as an attempt is in
+        // flight -- not just the Connect button -- so there's no way to
+        // e.g. edit the password or navigate back mid-attempt.
+        .disabled(http.isConnectingToNetwork)
     }
 
     // MARK: - Local network configuration (last wizard step, after WiFi joins)
