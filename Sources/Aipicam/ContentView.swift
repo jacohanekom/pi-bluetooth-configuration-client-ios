@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var manualSSID: String = ""
     @State private var password: String = ""
     @State private var isPasswordVisible = false
+    @State private var showResetConfirmation = false
     @State private var localIPField: String = ""
     @State private var rangeStartField: String = ""
     @State private var rangeEndField: String = ""
@@ -147,10 +148,14 @@ struct ContentView: View {
                 relaysDisclosure
                 solarBatteryDisclosure
 
-                Button("Reset") {
-                    http.resetNetwork()
+                if showResetConfirmation {
+                    resetConfirmation
+                } else {
+                    Button("Reset") {
+                        showResetConfirmation = true
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
             }
             // ScrollView proposes its own width to this VStack, but doesn't
             // clip content that ends up wider than that (e.g. a long relay
@@ -158,6 +163,33 @@ struct ContentView: View {
             // explicitly so a trailing-aligned control like a Toggle's
             // switch can't render past the screen's visible edge.
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    // MARK: - Reset confirmation
+
+    private var resetConfirmation: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Are you sure you wish to reset the device?")
+                .font(.subheadline)
+
+            Button {
+                showResetConfirmation = false
+                http.resetNetwork()
+            } label: {
+                Text("Yes").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .tint(.red)
+
+            Button {
+                showResetConfirmation = false
+            } label: {
+                Text("No").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
         }
     }
 
