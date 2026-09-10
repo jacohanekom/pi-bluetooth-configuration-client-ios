@@ -493,15 +493,29 @@ struct ContentView: View {
                     .frame(maxWidth: 50)
             }
 
-            Button("Finish") {
+            Button {
                 let start = Int(rangeStartField) ?? http.status.eth.rangeStart
                 let end = Int(rangeEndField) ?? http.status.eth.rangeEnd
                 http.setLocalNetworkConfig(ip: localIPField, rangeStart: start, rangeEnd: end)
                 http.finishSetup()
+            } label: {
+                Group {
+                    if http.isFinishing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Finish")
+                    }
+                }
+                .frame(maxWidth: .infinity)
             }
-            .disabled(!isValidIPv4(localIPField) || Int(rangeStartField) == nil || Int(rangeEndField) == nil)
+            .disabled(!isValidIPv4(localIPField) || Int(rangeStartField) == nil || Int(rangeEndField) == nil || http.isFinishing)
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
         }
+        // Same treatment as the wizard's password step: disables every
+        // control here (IP/range fields, the Finish button itself) for
+        // as long as the request is in flight or a reboot is expected.
+        .disabled(http.isFinishing)
         .onAppear {
             if localIPField.isEmpty { localIPField = http.status.eth.ip }
             if rangeStartField.isEmpty { rangeStartField = String(http.status.eth.rangeStart) }

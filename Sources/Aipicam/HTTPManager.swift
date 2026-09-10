@@ -99,6 +99,12 @@ final class HTTPManager: ObservableObject {
     // password step and show a spinner immediately on tap, not up to
     // pollInterval seconds later.
     @Published private(set) var isConnectingToNetwork = false
+    // True from the moment finishSetup() is tapped until either the
+    // request fails outright (transport error -- re-enables the step to
+    // retry) or the Pi's connection actually drops as expected once it
+    // reboots (stays true the whole time in between, since success here
+    // always leads to that reboot shortly after).
+    @Published private(set) var isFinishing = false
     // Ports with a POST /relay in flight -- unlike the old BLE-era retry
     // loop (which had to guess whether a write ever reached the daemon at
     // all), an HTTP response is a definitive answer, so this is purely
@@ -361,6 +367,7 @@ final class HTTPManager: ObservableObject {
         isConnected = false
         isConnecting = false
         isConnectingToNetwork = false
+        isFinishing = false
         status = .empty
         wizardStep = .scanning
         pendingRelayPorts.removeAll()
@@ -500,6 +507,8 @@ final class HTTPManager: ObservableObject {
         // that case (staging never touched the AP), which is what tells
         // these two cases apart.
         let viaAP = status.apActive
+        isFinishing = true
+        lastError = nil
         expectDisconnect = true
         if viaAP {
             expectDisconnectMessage = "Finishing setup -- the Pi will reboot and attempt to join the network you entered. Reconnect to your regular WiFi, then reopen the app and search again once it's had a chance to come up -- if the network was reachable, it should be found there; otherwise the Pi falls back to its own setup network again."
@@ -508,7 +517,21 @@ final class HTTPManager: ObservableObject {
             expectDisconnectMessage = "Finishing setup -- the Pi will reboot shortly."
             addressAfterDisconnect = nil // same address is expected to come back
         }
-        Task { await self.post(path: "finish") }
+        Task {
+            let ok = await self.post(path: "finish")
+            if ok {
+                // Confirms the daemon actually received and accepted the
+                // request -- shown immediately, not deferred until the
+                // connection eventually drops (which pollOnce's own
+                // failure handling would otherwise wait ~9s to notice).
+                // The step itself stays disabled/busy (isFinishing stays
+                // true) until that drop actually happens, since success
+                // here always leads to a reboot shortly after.
+                self.lastInfo = self.expectDisconnectMessage
+            } else {
+                self.isFinishing = false
+            }
+        }
     }
 
     /// Toggles a relay pi-bluetooth-configuration forwards to
