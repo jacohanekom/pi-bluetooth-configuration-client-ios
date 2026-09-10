@@ -8,11 +8,12 @@ enum WizardStep: Equatable {
     case scanning
     case pickNetwork
     case enterPassword(ssid: String)
-    // WiFi joined but the wizard hasn't been finished yet -- eth0's
-    // gateway IP/DHCP range can still be customized here before
-    // finishSetup() sends "finish" and the Pi reboots. Only reachable
-    // when the fallback AP was NOT involved in getting here -- see
-    // connectToNetwork's own comment.
+    // eth0's gateway IP/DHCP range can be customized here before
+    // finishSetup() sends "finish" and the Pi reboots -- reached either
+    // once WiFi is actually connected (already on a real network,
+    // reconfiguring), or immediately once credentials are staged while
+    // setup started from the fallback AP (no live join attempted yet in
+    // that case -- see connectToNetwork's own comment).
     case localNetworkConfig
 }
 
@@ -40,15 +41,19 @@ enum WizardStep: Equatable {
 ///
 /// This is a one-shot provisioning flow, not a managed session: the Pi
 /// reboots a few seconds after "finish" or "forget" (see that repo's
-/// README, "One-shot provisioning and reboot behavior"), and a
-/// successful "connect" started from the fallback AP reboots immediately
-/// too -- in every one of those cases this client's own connection to
-/// the Pi is expected to drop, not a failure to retry against. Because
-/// the radio can't run AP and station mode at once, a connect that
-/// started from the fallback AP also means the *address* that was
-/// working stops being valid at all (the AP disappears) -- there is no
-/// way for this client to discover the Pi's new address automatically,
-/// so it surfaces that plainly and sends the user back to address entry
+/// README, "One-shot provisioning and reboot behavior") -- in either
+/// case this client's own connection to the Pi is expected to drop, not
+/// a failure to retry against. Submitting credentials while the fallback
+/// AP is active does *not* disconnect anything by itself anymore -- the
+/// daemon only stages them (a plain file write, no live join attempted),
+/// so the wizard continues normally through local network configuration
+/// before "finish" is what actually triggers the reboot (and the actual
+/// join attempt, right as part of it). Because the radio can't run AP
+/// and station mode at once, that reboot means the *address* that was
+/// working (the fallback AP's) stops being valid at all once it
+/// happens, regardless of whether the join succeeds -- there is no way
+/// for this client to discover the Pi's new address automatically, so
+/// it surfaces that plainly and sends the user back to address entry
 /// instead of pretending to recover.
 @MainActor
 final class HTTPManager: ObservableObject {
@@ -417,17 +422,47 @@ final class HTTPManager: ObservableObject {
         lastError = nil
         isConnectingToNetwork = true
         let startedFromAP = status.apActive
-        expectDisconnect = true
-        if startedFromAP {
-            expectDisconnectMessage = "Attempting to join \"\(ssid)\" -- the Pi's setup network will disappear shortly as part of that. Reconnect your phone to your regular WiFi, then reopen this app once the Pi has had a chance to come up on \"\(ssid)\" and enter its new address."
-            addressAfterDisconnect = nil // no way to know the new address in advance
-        } else {
+
+        if !startedFromAP {
+            // Already on a real network, reconfiguring: the daemon joins
+            // directly and synchronously, tracked via wifi.state polling
+            // (see applyStatus) -- unchanged from before.
+            expectDisconnect = true
             expectDisconnectMessage = "Attempting to join \"\(ssid)\". If your phone loses its connection to the Pi, reconnect to the same network as the Pi and re-enter its address to continue."
             addressAfterDisconnect = nil
         }
+        // If startedFromAP, deliberately NOT setting expectDisconnect
+        // here: the daemon only *stages* these credentials while the
+        // fallback AP is active (see pi-bluetooth-configuration-alpine's
+        // README, "One-shot provisioning and reboot behavior") -- no
+        // join is attempted yet, so the AP stays up and this connection
+        // is never disrupted. The real join (and the disconnect that
+        // goes with it) only happens once finishSetup() triggers the
+        // reboot -- see that method for the warning that belongs there
+        // instead.
+
         Task {
             let ok = await self.post(path: "connect", body: ["ssid": ssid, "password": password])
-            if !ok { self.isConnectingToNetwork = false }
+            if !ok {
+                // Transport-level failure (never reached the daemon at
+                // all) -- nothing to wait on either way.
+                self.isConnectingToNetwork = false
+                return
+            }
+            if startedFromAP {
+                // Staging is a synchronous, fast file write on the
+                // daemon's side -- ok:true here means it's already done,
+                // not just "request accepted, wait and see" the way the
+                // direct-join path below is. Nothing about the
+                // connection changed, so just move on immediately.
+                self.isConnectingToNetwork = false
+                self.wizardStep = .localNetworkConfig
+            }
+            // Otherwise (direct join, already on a real network): leave
+            // isConnectingToNetwork set -- the daemon's own join attempt
+            // is still in progress asynchronously, and applyStatus()
+            // clears this once wifi.state actually reaches "connected"
+            // or "failed".
         }
     }
 
@@ -458,9 +493,21 @@ final class HTTPManager: ObservableObject {
     /// involved (see connectToNetwork), so the address itself doesn't
     /// change here -- polling just needs to ride out the reboot gap.
     func finishSetup() {
+        // If setup started from the fallback AP, credentials were only
+        // *staged* when Connect was tapped (see connectToNetwork) -- this
+        // is the point the daemon actually attempts the join, as part of
+        // the reboot this triggers. status.apActive is still true here in
+        // that case (staging never touched the AP), which is what tells
+        // these two cases apart.
+        let viaAP = status.apActive
         expectDisconnect = true
-        expectDisconnectMessage = "Finishing setup -- the Pi will reboot shortly."
-        addressAfterDisconnect = nil // same address is expected to come back
+        if viaAP {
+            expectDisconnectMessage = "Finishing setup -- the Pi will reboot and attempt to join the network you entered. Reconnect to your regular WiFi, then reopen the app and search again once it's had a chance to come up -- if the network was reachable, it should be found there; otherwise the Pi falls back to its own setup network again."
+            addressAfterDisconnect = nil // depends entirely on whether the join succeeds
+        } else {
+            expectDisconnectMessage = "Finishing setup -- the Pi will reboot shortly."
+            addressAfterDisconnect = nil // same address is expected to come back
+        }
         Task { await self.post(path: "finish") }
     }
 

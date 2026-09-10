@@ -226,28 +226,34 @@ stays out of git, same principle as before, just one level removed.
    - Pick one from the list, or **Enter Network Manually** for a hidden
      network.
 5. Enter the password (leave blank for an open network) and tap
-   **Connect**. A status line shows live progress
-   (`connecting` → `connected`/`failed`) for as long as the app can
-   still reach the Pi. **If the Pi was on its fallback AP**, expect to
-   lose that connection entirely partway through -- joining the new
-   network tears the AP down, since this radio can't run both at once.
-   The app says so plainly and sends you back to address entry, which
-   searches again automatically; rejoin your regular WiFi and wait a
-   moment for the Pi to finish joining and re-advertise itself there
-   (skipping straight to the details screen if it joined successfully --
-   see step 9). **If the Pi was already on a real network**
-   (reconfiguring), the connection normally survives and the wizard
-   continues below.
-6. Once WiFi joins (without the AP having been involved), the wizard
-   moves to **Local Network Configuration**: `eth0` already has a
-   working gateway IP and DHCP server (it's always on, from the moment
-   the Pi first boots -- see the daemon's README, "Ethernet
+   **Connect** -- the whole step disables itself and shows a spinner
+   while this is in flight. What happens next depends on how you reached
+   this screen:
+   - **If the Pi was on its fallback AP**: tapping Connect does *not*
+     disconnect anything -- the daemon only saves the credentials for
+     later (see the daemon's README, "One-shot provisioning and reboot
+     behavior"), so the AP stays up and you move straight to the next
+     step below.
+   - **If the Pi was already on a real network** (reconfiguring): a
+     status line shows live progress (`connecting` → `connected`/
+     `failed`) while the daemon actually attempts the join right away.
+     On failure, edit and retry; on success, the wizard continues below.
+6. The wizard moves to **Local Network Configuration**: `eth0` already
+   has a working gateway IP and DHCP server (it's always on, from the
+   moment the Pi first boots -- see the daemon's README, "Ethernet
    direct-connect"), prefilled here so you can just confirm it, or
    change the IP/DHCP range if you'd like something different.
-7. Tap **Finish**. This is what actually concludes setup and reboots
-   the Pi a few seconds later -- losing the connection is expected, not
-   an error; the app reconnects to the same address automatically once
-   the Pi is back up, landing on the details screen described next.
+7. Tap **Finish**. This is what actually concludes setup and reboots the
+   Pi a few seconds later -- losing the connection at this point is
+   expected, not an error. **If setup started from the fallback AP**,
+   this is also the moment the credentials from step 5 are actually
+   attempted, as part of that same reboot -- rejoin your regular WiFi and
+   search again once the Pi's had a chance to come up; if the network
+   was reachable you'll find it there (skipping straight to the details
+   screen), otherwise the Pi falls back to its own setup network again
+   and you're back to step 2. **If the Pi was already on a real
+   network**, the app just reconnects to the same address automatically
+   once it's back up, landing on the details screen described next.
 8. **Reset** removes the network the Pi last configured and reboots it
    the same way (this sends the same `/forget` request the daemon's API
    always had -- "Reset" is just how this app labels it). The Pi comes
