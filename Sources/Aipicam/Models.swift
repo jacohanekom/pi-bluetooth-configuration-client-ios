@@ -59,6 +59,16 @@ struct RelayState: Decodable, Equatable, Identifiable {
     var isOn: Bool { state == "on" }
 }
 
+/// Whoever signed in via Sign in with Apple, if anyone has -- purely
+/// informational (see pi-bluetooth-configuration-alpine's README,
+/// "HTTP API", POST /user). Either field may be empty; Apple only
+/// shares a real name/email on that Apple ID's very first
+/// authorization for this app.
+struct UserInfo: Decodable, Equatable {
+    var name: String
+    var email: String
+}
+
 /// Identifies the connected Victron device, if any -- pi-bluetooth-configuration's
 /// README, "Victron solar/battery telemetry".
 struct VictronDevice: Decodable, Equatable {
@@ -127,13 +137,15 @@ struct StatusResponse: Decodable, Equatable {
     var relays: [RelayState]
     var victron: VictronStatus
     var scan: [WifiScanResult]
+    var user: UserInfo?
 
     static let empty = StatusResponse(
-        wifi: .idle, apActive: false, eth: .unknown, leases: [], relays: [], victron: .disconnected, scan: []
+        wifi: .idle, apActive: false, eth: .unknown, leases: [], relays: [], victron: .disconnected, scan: [],
+        user: nil
     )
 
     init(wifi: WifiStatus, apActive: Bool, eth: EthernetConfig, leases: [DhcpLease], relays: [RelayState],
-         victron: VictronStatus, scan: [WifiScanResult]) {
+         victron: VictronStatus, scan: [WifiScanResult], user: UserInfo?) {
         self.wifi = wifi
         self.apActive = apActive
         self.eth = eth
@@ -141,6 +153,7 @@ struct StatusResponse: Decodable, Equatable {
         self.relays = relays
         self.victron = victron
         self.scan = scan
+        self.user = user
     }
 
     init(from decoder: Decoder) throws {
@@ -152,9 +165,10 @@ struct StatusResponse: Decodable, Equatable {
         relays = try c.decodeIfPresent([RelayState].self, forKey: .relays) ?? []
         victron = try c.decodeIfPresent(VictronStatus.self, forKey: .victron) ?? .disconnected
         scan = try c.decodeIfPresent([WifiScanResult].self, forKey: .scan) ?? []
+        user = try c.decodeIfPresent(UserInfo.self, forKey: .user)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case wifi, apActive, eth, leases, relays, victron, scan
+        case wifi, apActive, eth, leases, relays, victron, scan, user
     }
 }

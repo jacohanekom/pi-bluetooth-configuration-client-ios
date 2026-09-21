@@ -1,5 +1,6 @@
 *.xcodeproj
 Sources/Aipicam/Info.plist
+Sources/Aipicam/Aipicam.entitlements
 .build/
 .swiftpm/
 DerivedData/

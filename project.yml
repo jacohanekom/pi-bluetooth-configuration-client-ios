@@ -84,6 +84,29 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+    # Same XcodeGen-owns-the-generated-file pattern as "info" above --
+    # this produces Sources/Aipicam/Aipicam.entitlements and wires up
+    # CODE_SIGN_ENTITLEMENTS automatically, rather than a hand-maintained
+    # entitlements file + a manually-set build setting.
+    #
+    # This alone is NOT enough for Sign in with Apple to actually work on
+    # a real device or in TestFlight -- the App ID itself
+    # (com.jacohanekom.aipicam) also needs the "Sign In with Apple"
+    # capability enabled at developer.apple.com (Certificates,
+    # Identifiers & Profiles → Identifiers → this Bundle ID →
+    # Capabilities), something only you can do since it needs your own
+    # Apple Developer account. With automatic signing (CODE_SIGN_STYLE:
+    # Automatic, already set below) and this entitlement present, Xcode
+    # adds that capability to the App ID for you the first time you
+    # build to a real device with your team selected -- no separate
+    # portal visit needed for a plain (free) Apple ID, same as how the
+    # Bundle ID itself gets registered automatically per this repo's own
+    # TestFlight setup notes in README.md.
+    entitlements:
+      path: Sources/Aipicam/Aipicam.entitlements
+      properties:
+        com.apple.developer.applesignin:
+          - Default
     settings:
       base:
         PRODUCT_NAME: aipicam

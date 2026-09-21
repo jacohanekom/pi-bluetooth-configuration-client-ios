@@ -1,3 +1,4 @@
+import AuthenticationServices
 import SwiftUI
 
 /// Adapted from pi-bluetooth-configuration-client-mac's ContentView.swift --
@@ -147,6 +148,7 @@ struct ContentView: View {
                 connectivityDisclosure
                 relaysDisclosure
                 solarBatteryDisclosure
+                ownerDisclosure
 
                 Button("Reset") {
                     showResetConfirmation = true
@@ -337,6 +339,64 @@ struct ContentView: View {
             .padding(.top, 8)
         } label: {
             Text("Solar/Battery Information").font(.headline)
+        }
+    }
+
+    // MARK: - Owner (Sign in with Apple, purely informational)
+    //
+    // Not part of the wizard and not gated by `finished` -- labels the
+    // device with whoever signed in, nothing more (see
+    // pi-bluetooth-configuration-alpine's README, "HTTP API", POST
+    // /user). Shows the stored name/email once set; the button stays
+    // available even then, to let a different Apple ID re-label the
+    // device.
+
+    @State private var ownerExpanded = false
+
+    private var ownerDisclosure: some View {
+        DisclosureGroup(isExpanded: $ownerExpanded) {
+            VStack(alignment: .leading, spacing: 12) {
+                if let user = http.status.user, !user.name.isEmpty || !user.email.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if !user.name.isEmpty { LabeledContent("Name", value: user.name) }
+                        if !user.email.isEmpty { LabeledContent("Email", value: user.email) }
+                    }
+                } else {
+                    Text("Not signed in")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                SignInWithAppleButton(.signIn) { request in
+                    request.requestedScopes = [.fullName, .email]
+                } onCompletion: { result in
+                    switch result {
+                    case .success(let authorization):
+                        guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+                            return
+                        }
+                        // Apple only includes fullName/email on that
+                        // Apple ID's very first authorization for this
+                        // app's bundle ID -- every subsequent sign-in
+                        // (even after reinstalling this app) returns
+                        // neither, only the opaque, unhelpful-for-our-
+                        // purposes `user` identifier. submitUser()
+                        // surfaces that as an error rather than
+                        // silently doing nothing if both are empty.
+                        let name = [credential.fullName?.givenName, credential.fullName?.familyName]
+                            .compactMap { $0 }
+                            .joined(separator: " ")
+                        http.submitUser(name: name, email: credential.email ?? "")
+                    case .failure(let error):
+                        http.lastError = "Sign in with Apple failed: \(error.localizedDescription)"
+                    }
+                }
+                .signInWithAppleButtonStyle(.black)
+                .frame(height: 44)
+            }
+            .padding(.top, 8)
+        } label: {
+            Text("Owner").font(.headline)
         }
     }
 

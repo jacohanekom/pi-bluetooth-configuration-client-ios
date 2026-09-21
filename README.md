@@ -287,6 +287,16 @@ stays out of git, same principle as before, just one level removed.
      battery monitors, not the MPPT chargers this integration targets.
      Load output isn't shown either -- not every MPPT has one, and it's
      always "ON" on this integration's hardware.)
+   - **Owner**: purely informational -- **Sign in with Apple** labels
+     the device with a name/email (see pi-bluetooth-configuration-alpine's
+     README, "HTTP API", `POST /user`); nothing else reads this or gates
+     on it. Shows "Not signed in" plus the button until then; shows the
+     stored name/email afterward, with the button still available to
+     re-label the device with a different Apple ID. Apple only shares a
+     real name/email on that Apple ID's very first authorization for
+     this app -- a subsequent sign-in (even after reinstalling) returns
+     neither, which surfaces as an error rather than silently doing
+     nothing.
 
 Tap **Disconnect** in the toolbar at any point (during the wizard or on
 the details screen) to end the session.
@@ -302,6 +312,21 @@ Then in Xcode: pick your iPhone/iPad as the run destination (see
 Requirements above for why a Simulator run can't actually reach a Pi's
 fallback AP), select your team under Signing & Capabilities if this is
 the first time, and Run.
+
+**Sign in with Apple** (the Owner section on the details screen -- see
+"Using it" above) needs the App ID's "Sign In with Apple" capability
+enabled, which needs your own Apple Developer account -- something I
+can't do on your behalf. With automatic signing (already the default
+here) and this app's entitlement already declared in `project.yml`,
+Xcode adds that capability to the App ID for you the first time you
+build to a real device with your team selected, the same way it
+registers the Bundle ID itself automatically -- no separate portal
+visit needed for local development with a plain (free) Apple ID. The
+Simulator can also present the Sign in with Apple sheet and complete a
+real sign-in (it doesn't need a physical Secure Enclave the way Face
+ID/Touch ID confirmation does), so this doesn't require a device
+either. The TestFlight workflow's `-allowProvisioningUpdates` handles
+the same capability update non-interactively for that path.
 
 `make build` builds for the Simulator with code signing disabled --
 useful as a quick compile check. Unlike Bluetooth, the Simulator *can*

@@ -534,6 +534,32 @@ final class HTTPManager: ObservableObject {
         }
     }
 
+    /// Sends the result of Sign in with Apple to the daemon -- purely
+    /// informational (see pi-bluetooth-configuration-alpine's README,
+    /// "HTTP API", POST /user), not part of the wizard and not gated by
+    /// wizard step or `finished`; available any time this client is
+    /// connected. name and/or email may be empty (Apple only shares
+    /// them on that Apple ID's very first authorization for this app --
+    /// see ContentView's Sign in with Apple button for the caller-side
+    /// handling of a subsequent sign-in returning neither), but the
+    /// daemon rejects a request with both empty, so this does too
+    /// rather than making a request that's certain to fail.
+    func submitUser(name: String, email: String) {
+        guard !name.isEmpty || !email.isEmpty else {
+            lastError = "Apple didn't share a name or email this time -- see the note under Sign in with Apple."
+            return
+        }
+        Task {
+            if await self.post(path: "user", body: ["name": name, "email": email]) {
+                // Reflected locally immediately rather than waiting for
+                // the next poll -- this is a plain synchronous file
+                // write on the daemon's side (see write_camera_user),
+                // so ok:true here already means it's done.
+                self.status.user = UserInfo(name: name, email: email)
+            }
+        }
+    }
+
     /// Toggles a relay pi-bluetooth-configuration forwards to
     /// pi-relay-control-alpine on the Pi's behalf -- see that repo's
     /// README, "Relay control". Unlike the wizard actions above, this
