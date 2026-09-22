@@ -18,6 +18,7 @@ struct AipicamApp: App {
                 } else if auth.isSignedIn {
                     ContentView()
                         .environmentObject(http)
+                        .environmentObject(auth)
                 } else {
                     SignInView()
                         .environmentObject(auth)

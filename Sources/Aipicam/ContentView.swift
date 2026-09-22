@@ -1,4 +1,3 @@
-import AuthenticationServices
 import SwiftUI
 
 /// Adapted from pi-bluetooth-configuration-client-mac's ContentView.swift --
@@ -13,6 +12,7 @@ import SwiftUI
 ///     plain NSTextField never did in the first place.
 struct ContentView: View {
     @EnvironmentObject var http: HTTPManager
+    @EnvironmentObject var auth: AuthManager
     @State private var manualSSID: String = ""
     @State private var password: String = ""
     @State private var isPasswordVisible = false
@@ -342,16 +342,25 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Owner (Sign in with Apple, purely informational)
+    // MARK: - Owner (labels this specific Pi, purely informational)
     //
     // Not part of the wizard and not gated by `finished` -- labels the
-    // device with whoever signed in, nothing more (see
+    // device with whoever signed into the app, nothing more (see
     // pi-bluetooth-configuration-alpine's README, "HTTP API", POST
-    // /user). Shows the stored name/email once set; the button stays
-    // available even then, to let a different Apple ID re-label the
-    // device.
+    // /user). Deliberately NOT a second Sign in with Apple prompt here:
+    // Apple only ever shares a real name/email on that Apple ID's very
+    // first authorization for this app's bundle ID, and the app-level
+    // sign-in gate (SignInView/AuthManager) already consumes that one
+    // chance before this screen is ever reachable -- a second prompt
+    // here would always come back empty. Pre-filled from whatever
+    // AuthManager captured at that first sign-in instead (editable,
+    // since that capture can itself be empty -- an install on a device
+    // whose Apple ID already authorized this app once before, or a
+    // reinstall -- so this still works by just typing a name/email in).
 
     @State private var ownerExpanded = false
+    @State private var ownerNameField = ""
+    @State private var ownerEmailField = ""
 
     private var ownerDisclosure: some View {
         DisclosureGroup(isExpanded: $ownerExpanded) {
@@ -361,40 +370,29 @@ struct ContentView: View {
                         if !user.name.isEmpty { LabeledContent("Name", value: user.name) }
                         if !user.email.isEmpty { LabeledContent("Email", value: user.email) }
                     }
-                } else {
-                    Text("Not signed in")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                 }
 
-                SignInWithAppleButton(.signIn) { request in
-                    request.requestedScopes = [.fullName, .email]
-                } onCompletion: { result in
-                    switch result {
-                    case .success(let authorization):
-                        guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
-                            return
-                        }
-                        // Apple only includes fullName/email on that
-                        // Apple ID's very first authorization for this
-                        // app's bundle ID -- every subsequent sign-in
-                        // (even after reinstalling this app) returns
-                        // neither, only the opaque, unhelpful-for-our-
-                        // purposes `user` identifier. submitUser()
-                        // surfaces that as an error rather than
-                        // silently doing nothing if both are empty.
-                        let name = [credential.fullName?.givenName, credential.fullName?.familyName]
-                            .compactMap { $0 }
-                            .joined(separator: " ")
-                        http.submitUser(name: name, email: credential.email ?? "")
-                    case .failure(let error):
-                        http.lastError = "Sign in with Apple failed: \(error.localizedDescription)"
-                    }
+                TextField("Name", text: $ownerNameField)
+                    .textFieldStyle(.roundedBorder)
+                    .textContentType(.name)
+                TextField("Email", text: $ownerEmailField)
+                    .textFieldStyle(.roundedBorder)
+                    .textContentType(.emailAddress)
+                    .keyboardType(.emailAddress)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+
+                Button("Save") {
+                    http.submitUser(name: ownerNameField, email: ownerEmailField)
                 }
-                .signInWithAppleButtonStyle(.black)
-                .frame(height: 44)
+                .buttonStyle(.borderedProminent)
+                .disabled(ownerNameField.isEmpty && ownerEmailField.isEmpty)
             }
             .padding(.top, 8)
+            .onAppear {
+                if ownerNameField.isEmpty { ownerNameField = auth.name }
+                if ownerEmailField.isEmpty { ownerEmailField = auth.email }
+            }
         } label: {
             Text("Owner").font(.headline)
         }
