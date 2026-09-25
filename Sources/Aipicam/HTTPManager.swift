@@ -168,6 +168,17 @@ final class HTTPManager: ObservableObject {
         config.timeoutIntervalForRequest = Self.requestTimeout
         config.timeoutIntervalForResource = Self.requestTimeout
         config.waitsForConnectivity = false
+        // The Pi is frequently reachable ONLY over WiFi with no internet
+        // uplink at all -- its fallback AP is exactly that, by design
+        // (see the daemon's own README). iOS silently prefers cellular
+        // over a WiFi network it's learned has no internet access, which
+        // would route every request here into a dead end (192.168.x.x
+        // means nothing over cellular) with no distinguishing error --
+        // confirmed as the actual cause of "works in Safari, fails in
+        // the app" on a real device, not just a theoretical concern.
+        // Disabling cellular access outright forces every request onto
+        // WiFi, matching what this app can actually ever reach anyway.
+        config.allowsCellularAccess = false
         session = URLSession(configuration: config)
     }
 
@@ -208,7 +219,15 @@ final class HTTPManager: ObservableObject {
                 self.startPolling()
             } catch {
                 self.isConnecting = false
-                self.lastError = "Couldn't reach \(base.host ?? self.serverAddress) -- check that you're on the Pi's WiFi network (or the same local network) and that the address is correct."
+                // The underlying error, not just a canned message -- this
+                // has gone through several rounds of dead-end guessing
+                // (address, permissions, cellular, ATS, stale session) on
+                // a real device where the exact same address works fine
+                // in Safari, so the actual NSError code/description is
+                // worth more than another guess at this point.
+                let nsError = error as NSError
+                self.lastError = "Couldn't reach \(base.host ?? self.serverAddress): "
+                    + "\(nsError.domain) \(nsError.code) -- \(nsError.localizedDescription)"
             }
         }
     }
