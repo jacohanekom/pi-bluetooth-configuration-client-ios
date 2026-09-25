@@ -78,7 +78,16 @@ final class HTTPManager: ObservableObject {
 
     private static let addressDefaultsKey = "pi-bluetooth-configuration.serverAddress"
     private static let pollInterval: TimeInterval = 3
-    private static let requestTimeout: TimeInterval = 5
+    // 5s was too tight in practice: GET /status's own relay/Victron
+    // queries (see pi-bluetooth-configuration-alpine's relays_json) each
+    // carry up to a ~4s worst-case timeout (connect + recv) when that
+    // backend isn't responding, sequentially, per relay -- confirmed on
+    // real hardware as the actual cause of "Safari reaches it fine, the
+    // app times out" once any relay/Victron backend was unresponsive
+    // (NSURLErrorTimedOut, not a real connectivity failure). 20s covers
+    // that worst case with real margin while still being a sane bound
+    // for a genuinely unreachable Pi.
+    private static let requestTimeout: TimeInterval = 20
     // How many consecutive failed polls before giving up on the current
     // connection -- comfortably more than one transient hiccup (a single
     // slow relay/Victron query on the daemon's side, a momentary WiFi
