@@ -53,6 +53,16 @@ struct ContentView: View {
                     }
                 }
             }
+            // Bound to HTTPManager directly (not local @State) so it
+            // survives the connection drop finishSetup() expects right
+            // after -- the credentials themselves already arrived in
+            // that /finish response before the Pi ever reboots, so
+            // there's nothing left to wait for here.
+            .sheet(item: $http.adminCredentials) { credentials in
+                AdminCredentialsView(credentials: credentials) {
+                    http.adminCredentials = nil
+                }
+            }
         }
     }
 

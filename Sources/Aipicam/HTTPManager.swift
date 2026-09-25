@@ -17,6 +17,20 @@ enum WizardStep: Equatable {
     case localNetworkConfig
 }
 
+/// The one-time admin login pi-bluetooth-configuration-alpine generates
+/// the first time POST /finish ever actually succeeds (see that repo's
+/// README, "Logging in: the admin account, not root") -- root can no
+/// longer log in over SSH/Wetty at all, so this is the only way onto the
+/// device from that point on. Only a password hash is ever kept on the
+/// Pi afterward, so this is the only moment either value is retrievable;
+/// ContentView is expected to show it until the user explicitly
+/// acknowledges having saved it, not let it just scroll away.
+struct AdminCredentials: Identifiable, Equatable {
+    var id: String { username }
+    let username: String
+    let password: String
+}
+
 /// HTTP client for pi-bluetooth-configuration-alpine's JSON API -- see
 /// that repo's README ("HTTP API") for the routes this calls and the
 /// combined GET /status shape this polls.
@@ -115,6 +129,11 @@ final class HTTPManager: ObservableObject {
     @Published private(set) var pendingRelayPorts: Set<Int> = []
     @Published var lastError: String?
     @Published var lastInfo: String?
+    // Set at most once per device's lifetime, the moment POST /finish's
+    // response includes it (see finishSetup() below) -- nil the rest of
+    // the time, including on every later /finish (WiFi reconfiguration
+    // etc.), since the daemon only ever generates this account once.
+    @Published var adminCredentials: AdminCredentials?
 
     private let session: URLSession
     private var pollTask: Task<Void, Never>?
@@ -517,9 +536,50 @@ final class HTTPManager: ObservableObject {
             expectDisconnectMessage = "Finishing setup -- the Pi will reboot shortly."
             addressAfterDisconnect = nil // same address is expected to come back
         }
+        // Doesn't use the shared post() helper below -- unlike every
+        // other fire-and-forget action here, a successful response can
+        // carry adminUsername/adminPassword (see AdminCredentials'
+        // own comment) that the generic OkResponse-only decoding would
+        // silently discard, and a rejection now specifically means "not
+        // ready to finish yet" (HTTP 400 with a real message), not the
+        // generic "couldn't reach the Pi" transport-failure story.
         Task {
-            let ok = await self.post(path: "finish")
-            if ok {
+            guard let base = baseURL() else {
+                self.lastError = "Not connected"
+                self.isFinishing = false
+                self.expectDisconnect = false
+                return
+            }
+            do {
+                var request = URLRequest(url: base.appendingPathComponent("finish"))
+                request.httpMethod = "POST"
+                let (data, response) = try await session.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw URLError(.badServerResponse)
+                }
+                guard (200..<300).contains(httpResponse.statusCode) else {
+                    let reason = try? JSONDecoder().decode(ErrorResponse.self, from: data)
+                    self.lastError = "Couldn't finish setup"
+                        + (reason.map { ": \($0.error)" } ?? " -- make sure WiFi is connected first.")
+                    self.isFinishing = false
+                    self.expectDisconnect = false
+                    return
+                }
+                let decoded = try JSONDecoder().decode(FinishResponse.self, from: data)
+                guard decoded.ok else {
+                    self.lastError = "The Pi rejected that request."
+                    self.isFinishing = false
+                    self.expectDisconnect = false
+                    return
+                }
+                // Present only when both arrive together (the daemon
+                // only ever sends them as a pair -- see
+                // create_admin_account()) -- absent on every /finish
+                // after the device's very first one, which is the
+                // normal case, not an error.
+                if let username = decoded.adminUsername, let password = decoded.adminPassword {
+                    self.adminCredentials = AdminCredentials(username: username, password: password)
+                }
                 // Confirms the daemon actually received and accepted the
                 // request -- shown immediately, not deferred until the
                 // connection eventually drops (which pollOnce's own
@@ -528,11 +588,21 @@ final class HTTPManager: ObservableObject {
                 // true) until that drop actually happens, since success
                 // here always leads to a reboot shortly after.
                 self.lastInfo = self.expectDisconnectMessage
-            } else {
+            } catch {
+                self.lastError = "Couldn't reach the Pi -- check your connection and try again."
                 self.isFinishing = false
+                self.expectDisconnect = false
             }
         }
     }
+
+    private struct FinishResponse: Decodable {
+        var ok: Bool
+        var adminUsername: String?
+        var adminPassword: String?
+    }
+
+    private struct ErrorResponse: Decodable { var error: String }
 
     /// Sends the result of Sign in with Apple to the daemon -- purely
     /// informational (see pi-bluetooth-configuration-alpine's README,
