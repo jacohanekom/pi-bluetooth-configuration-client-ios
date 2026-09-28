@@ -231,6 +231,7 @@ final class HTTPManager: ObservableObject {
                 UserDefaults.standard.set(self.serverAddress, forKey: Self.addressDefaultsKey)
                 self.applyStatus(decoded)
                 self.startPolling()
+                self.syncDeviceTime(base: base)
             } catch {
                 self.isConnecting = false
                 // The underlying error, not just a canned message -- this
@@ -539,6 +540,33 @@ final class HTTPManager: ObservableObject {
     func setLocalNetworkConfig(ip: String, rangeStart: Int, rangeEnd: Int) {
         Task {
             await self.post(path: "ethernet", body: ["ip": ip, "rangeStart": rangeStart, "rangeEnd": rangeEnd])
+        }
+    }
+
+    /// Hands this phone's current clock to the Pi over the very first
+    /// successful connection, before the wizard even starts -- none of
+    /// these boards have a battery-backed RTC (see
+    /// pi-bluetooth-configuration-alpine/sdcard-image-pi3/README.md,
+    /// "System clock reliability"), so a freshly booted device's own
+    /// clock can be wildly wrong until NTP corrects it, which needs real
+    /// internet access it doesn't have yet while still sitting in its
+    /// own fallback AP -- and a wrong clock breaks HTTPS certificate-date
+    /// validation for anything the daemon itself does over HTTPS (e.g.
+    /// Cloudflare Tunnel provisioning, the moment WiFi does join). The
+    /// phone's own clock is essentially always correct by comparison.
+    /// Deliberately doesn't use the shared post() helper below -- this is
+    /// silent/best-effort, not a user-initiated action, so a failure here
+    /// (e.g. reconnecting to a device whose clock is already correct via
+    /// NTP by now) shouldn't surface as a visible error banner the way a
+    /// real user action's failure should.
+    private func syncDeviceTime(base: URL) {
+        Task {
+            var request = URLRequest(url: base.appendingPathComponent("time"))
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let unixTime = Int(Date().timeIntervalSince1970)
+            request.httpBody = try? JSONSerialization.data(withJSONObject: ["unixTime": unixTime])
+            _ = try? await session.data(for: request)
         }
     }
 
