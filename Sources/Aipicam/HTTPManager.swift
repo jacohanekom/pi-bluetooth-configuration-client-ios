@@ -9,11 +9,12 @@ enum WizardStep: Equatable {
     case pickNetwork
     case enterPassword(ssid: String)
     // eth0's gateway IP/DHCP range can be customized here before
-    // finishSetup() sends "finish" and the Pi reboots -- reached either
-    // once WiFi is actually connected (already on a real network,
-    // reconfiguring), or immediately once credentials are staged while
-    // setup started from the fallback AP (no live join attempted yet in
-    // that case -- see connectToNetwork's own comment).
+    // finishSetup() sends "finish" -- reached either once WiFi is
+    // actually connected (already on a real network, reconfiguring), or
+    // immediately once credentials are staged while setup started from
+    // the fallback AP (no live join attempted yet in that case -- see
+    // connectToNetwork's own comment; "finish" is what actually attempts
+    // it, live, not a reboot).
     case localNetworkConfig
 }
 
@@ -53,22 +54,25 @@ struct AdminCredentials: Identifiable, Equatable {
 /// fallback-AP default) remains available as a fallback for the rare
 /// network that blocks mDNS multicast, or if nothing was found in time.
 ///
-/// This is a one-shot provisioning flow, not a managed session: the Pi
-/// reboots a few seconds after "finish" or "forget" (see that repo's
-/// README, "One-shot provisioning and reboot behavior") -- in either
-/// case this client's own connection to the Pi is expected to drop, not
-/// a failure to retry against. Submitting credentials while the fallback
-/// AP is active does *not* disconnect anything by itself anymore -- the
-/// daemon only stages them (a plain file write, no live join attempted),
-/// so the wizard continues normally through local network configuration
-/// before "finish" is what actually triggers the reboot (and the actual
-/// join attempt, right as part of it). Because the radio can't run AP
-/// and station mode at once, that reboot means the *address* that was
-/// working (the fallback AP's) stops being valid at all once it
-/// happens, regardless of whether the join succeeds -- there is no way
-/// for this client to discover the Pi's new address automatically, so
-/// it surfaces that plainly and sends the user back to address entry
-/// instead of pretending to recover.
+/// Neither "finish" nor "forget" reboots the Pi at all anymore -- both
+/// take effect live, in place (see pi-bluetooth-configuration-alpine's
+/// README, "Logging in: the admin account, not root" and its do_finish/
+/// do_forget comments for why an earlier reboot-based design was
+/// dropped). Submitting credentials while the fallback AP is active
+/// still only *stages* them (a plain file write, no live join
+/// attempted) so the wizard continues normally through local network
+/// configuration -- "finish" is what actually attempts the join, live,
+/// as part of that same call. Because the radio can't run AP and
+/// station mode at once, finishing (or resetting) from that
+/// fallback-AP state still means the *address* that was working stops
+/// being valid the moment the radio leaves AP mode, regardless of
+/// whether the join succeeds -- there is no way for this client to
+/// discover the Pi's new address automatically, so it surfaces that
+/// plainly and sends the user back to address entry instead of
+/// pretending to recover. Finishing while *already* on a real network
+/// (reconfiguring an already-provisioned Pi) is different: nothing
+/// about this phone's own connection changes at all in that case, since
+/// finishing there is purely local work on the daemon's side.
 @MainActor
 final class HTTPManager: ObservableObject {
     // Matches pi-bluetooth-configuration-alpine's own config.ini defaults
@@ -122,11 +126,12 @@ final class HTTPManager: ObservableObject {
     // password step and show a spinner immediately on tap, not up to
     // pollInterval seconds later.
     @Published private(set) var isConnectingToNetwork = false
-    // True from the moment finishSetup() is tapped until either the
-    // request fails outright (transport error -- re-enables the step to
-    // retry) or the Pi's connection actually drops as expected once it
-    // reboots (stays true the whole time in between, since success here
-    // always leads to that reboot shortly after).
+    // True from the moment finishSetup() is tapped until the request
+    // concludes one way or another: a transport-level failure (re-enables
+    // the step to retry), a successful finish while already on a real
+    // network (nothing to wait for -- cleared immediately), or the Pi's
+    // connection actually dropping as expected once a fallback-AP finish
+    // tears the AP down to attempt the live join.
     @Published private(set) var isFinishing = false
     // Ports with a POST /relay in flight -- unlike the old BLE-era retry
     // loop (which had to guess whether a write ever reached the daemon at
@@ -465,13 +470,12 @@ final class HTTPManager: ObservableObject {
     /// Submits WiFi credentials. Behavior on the daemon side genuinely
     /// differs depending on whether the fallback AP is currently active
     /// (see pi-bluetooth-configuration-alpine's README, "One-shot
-    /// provisioning and reboot behavior") -- this radio can't run AP and
-    /// station mode at once, so if the AP is active, submitting real
-    /// credentials tears it down as part of joining, which severs this
-    /// client's own connection (reached via that same AP) partway
-    /// through. There's no way to discover the Pi's new address
-    /// automatically from here, so this warns plainly and, once the
-    /// connection actually drops, sends the user back to address entry.
+    /// provisioning, no reboot needed") -- this radio can't run AP and
+    /// station mode at once, so while the AP is active the daemon only
+    /// *stages* these credentials rather than attempting the join here;
+    /// the actual join (and the disconnect that comes with tearing the AP
+    /// down for it) is deferred to finishSetup() instead, live, not a
+    /// reboot -- see that method for the warning that belongs there.
     func connectToNetwork(ssid: String, password: String) {
         lastError = nil
         isConnectingToNetwork = true
@@ -487,13 +491,11 @@ final class HTTPManager: ObservableObject {
         }
         // If startedFromAP, deliberately NOT setting expectDisconnect
         // here: the daemon only *stages* these credentials while the
-        // fallback AP is active (see pi-bluetooth-configuration-alpine's
-        // README, "One-shot provisioning and reboot behavior") -- no
-        // join is attempted yet, so the AP stays up and this connection
-        // is never disrupted. The real join (and the disconnect that
-        // goes with it) only happens once finishSetup() triggers the
-        // reboot -- see that method for the warning that belongs there
-        // instead.
+        // fallback AP is active -- no join is attempted yet, so the AP
+        // stays up and this connection is never disrupted. The real join
+        // (and the disconnect that goes with it) only happens once
+        // finishSetup() is tapped -- see that method for the warning
+        // that belongs there instead.
 
         Task {
             let ok = await self.post(path: "connect", body: ["ssid": ssid, "password": password])
@@ -525,7 +527,7 @@ final class HTTPManager: ObservableObject {
     // README), this is just how the app presents it.
     func resetNetwork() {
         expectDisconnect = true
-        expectDisconnectMessage = "Resetting -- the Pi will reboot and start its setup network again. Rejoin it, then re-enter its address (\(Self.defaultAddress) unless you customized it)."
+        expectDisconnectMessage = "Resetting -- starting the Pi's own setup network again now (no reboot needed). Rejoin it, then re-enter its address (\(Self.defaultAddress) unless you customized it)."
         addressAfterDisconnect = Self.defaultAddress
         Task { await self.post(path: "forget") }
     }
@@ -541,28 +543,33 @@ final class HTTPManager: ObservableObject {
     }
 
     /// Concludes the setup wizard -- the daemon creates its marker file
-    /// and reboots a few seconds later. Only meaningful once WiFi is
-    /// actually connected; the UI only offers this button at that point.
-    /// This path is only reachable when the fallback AP was never
-    /// involved (see connectToNetwork), so the address itself doesn't
-    /// change here -- polling just needs to ride out the reboot gap.
+    /// live, in place; no reboot involved at all anymore (see
+    /// pi-bluetooth-configuration-alpine's do_finish() for why). Only
+    /// meaningful once WiFi is actually connected or staged; the UI only
+    /// offers this button at that point.
     func finishSetup() {
         // If setup started from the fallback AP, credentials were only
         // *staged* when Connect was tapped (see connectToNetwork) -- this
-        // is the point the daemon actually attempts the join, as part of
-        // the reboot this triggers. status.apActive is still true here in
-        // that case (staging never touched the AP), which is what tells
-        // these two cases apart.
+        // is the point the daemon actually attempts the join, live,
+        // freeing the radio from AP mode first (the two can't run at
+        // once) -- which disconnects this phone from it for a few
+        // seconds regardless of whether the join succeeds, same physical
+        // constraint as before, just without an actual system reboot in
+        // the middle of it anymore. status.apActive is still true here
+        // in that case (staging never touched the AP), which is what
+        // tells these two cases apart. Finishing while *already* on a
+        // real network (reconfiguring) is different: nothing about this
+        // phone's own connection changes at all, since that's purely
+        // local work on the daemon's side.
         let viaAP = status.apActive
         isFinishing = true
         lastError = nil
-        expectDisconnect = true
         if viaAP {
-            expectDisconnectMessage = "Finishing setup -- the Pi will reboot and attempt to join the network you entered. Reconnect to your regular WiFi, then reopen the app and search again once it's had a chance to come up -- if the network was reachable, it should be found there; otherwise the Pi falls back to its own setup network again."
+            expectDisconnect = true
+            expectDisconnectMessage = "Finishing setup -- joining the network you entered now. If your phone loses its connection to the Pi's own WiFi, reconnect to your regular network and reopen the app -- it should be found there if the join succeeded, or back in the Pi's own setup network if it didn't."
             addressAfterDisconnect = nil // depends entirely on whether the join succeeds
         } else {
-            expectDisconnectMessage = "Finishing setup -- the Pi will reboot shortly."
-            addressAfterDisconnect = nil // same address is expected to come back
+            expectDisconnect = false
         }
         // Doesn't use the shared post() helper below -- unlike every
         // other fire-and-forget action here, a successful response can
@@ -608,14 +615,28 @@ final class HTTPManager: ObservableObject {
                 if let username = decoded.adminUsername, let password = decoded.adminPassword {
                     self.adminCredentials = AdminCredentials(username: username, password: password)
                 }
-                // Confirms the daemon actually received and accepted the
-                // request -- shown immediately, not deferred until the
-                // connection eventually drops (which pollOnce's own
-                // failure handling would otherwise wait ~9s to notice).
-                // The step itself stays disabled/busy (isFinishing stays
-                // true) until that drop actually happens, since success
-                // here always leads to a reboot shortly after.
-                self.lastInfo = self.expectDisconnectMessage
+                if viaAP {
+                    // Confirms the daemon actually received and accepted
+                    // the request -- shown immediately, not deferred
+                    // until the connection eventually drops (which
+                    // pollOnce's own failure handling would otherwise
+                    // wait ~9s to notice). The step itself stays
+                    // disabled/busy (isFinishing stays true) until that
+                    // drop actually happens: this response arrived before
+                    // the daemon's own background attempt even starts
+                    // (see do_finish()'s own comment on why), so the AP
+                    // this phone is talking over is still up right now,
+                    // but won't be for much longer either way.
+                    self.lastInfo = self.expectDisconnectMessage
+                } else {
+                    // Nothing about this phone's own connection changed
+                    // -- the very next poll already reflects the
+                    // finished state (no reboot to wait out anymore), so
+                    // there's nothing left for this step to stay busy
+                    // about.
+                    self.isFinishing = false
+                    self.lastInfo = "Setup finished."
+                }
             } catch {
                 self.lastError = "Couldn't reach the Pi -- check your connection and try again."
                 self.isFinishing = false

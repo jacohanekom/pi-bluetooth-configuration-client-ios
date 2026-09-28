@@ -31,15 +31,17 @@ Built with SwiftUI + URLSession + Network (`NWBrowser`/`NWConnection` for
 discovery) -- no CoreBluetooth, no third-party dependency of any kind
 (see git history for the earlier BLE-based revision this replaced).
 
-This is a one-shot provisioning flow, not a managed session: the Pi
-reboots itself a few seconds after **Finish** or a reset (see the
-daemon's README, "One-shot provisioning and reboot behavior"), and a
-successful **Connect** that started from the fallback AP reboots
-immediately, no separate Finish step -- this radio can't run the AP and
-a real network at once, so joining a new network necessarily means the
-address this app was just using stops working. This app doesn't try to
-keep managing anything once that happens; it surfaces it plainly instead
-of pretending to recover, and sends you back to entering an address once
+This is a one-shot provisioning flow, not a managed session. Neither
+**Finish** nor a reset reboots the Pi anymore (see the daemon's README,
+"One-shot provisioning, no reboot needed") -- both take effect live.
+Finishing while already on a real network doesn't disconnect this app
+at all. Finishing (or resetting) from the fallback AP still does,
+though: this radio can't run the AP and a real network at once, so
+actually attempting the join means the address this app was just using
+stops working the moment the radio leaves AP mode, regardless of
+whether the join itself succeeds. This app doesn't try to keep managing
+anything once that happens; it surfaces it plainly instead of
+pretending to recover, and sends you back to entering an address once
 the Pi (hopefully) comes back up elsewhere.
 
 ## Security
@@ -231,9 +233,9 @@ stays out of git, same principle as before, just one level removed.
    this screen:
    - **If the Pi was on its fallback AP**: tapping Connect does *not*
      disconnect anything -- the daemon only saves the credentials for
-     later (see the daemon's README, "One-shot provisioning and reboot
-     behavior"), so the AP stays up and you move straight to the next
-     step below.
+     later (see the daemon's README, "One-shot provisioning, no reboot
+     needed"), so the AP stays up and you move straight to the next
+     step below. The join itself isn't attempted until you tap Finish.
    - **If the Pi was already on a real network** (reconfiguring): a
      status line shows live progress (`connecting` → `connected`/
      `failed`) while the daemon actually attempts the join right away.
@@ -243,25 +245,27 @@ stays out of git, same principle as before, just one level removed.
    moment the Pi first boots -- see the daemon's README, "Ethernet
    direct-connect"), prefilled here so you can just confirm it, or
    change the IP/DHCP range if you'd like something different.
-7. Tap **Finish**. This is what actually concludes setup and reboots the
-   Pi a few seconds later -- losing the connection at this point is
-   expected, not an error. **If setup started from the fallback AP**,
-   this is also the moment the credentials from step 5 are actually
-   attempted, as part of that same reboot -- rejoin your regular WiFi and
-   search again once the Pi's had a chance to come up; if the network
-   was reachable you'll find it there (skipping straight to the details
-   screen), otherwise the Pi falls back to its own setup network again
-   and you're back to step 2. **If the Pi was already on a real
-   network**, the app just reconnects to the same address automatically
-   once it's back up, landing on the details screen described next.
-8. **Reset** removes the network the Pi last configured and reboots it
-   the same way (this sends the same `/forget` request the daemon's API
-   always had -- "Reset" is just how this app labels it). The Pi comes
-   back up in fallback-AP mode afterward (nothing is configured anymore)
-   -- rejoin that AP and search again, same as step 2. Only shown once
-   setup has finished: resetting only makes sense once there's something
-   to reset. Local network settings aren't touched by Reset and become
-   editable again once the wizard restarts.
+7. Tap **Finish**. This concludes setup live, in place -- no reboot.
+   **If setup started from the fallback AP**, this is also the moment
+   the credentials from step 5 are actually attempted: the Pi frees the
+   radio from AP mode to try the real join, which does disconnect this
+   phone from it for a few seconds regardless of whether the join
+   succeeds (losing the connection here is expected, not an error) --
+   rejoin your regular WiFi and search again; if the network was
+   reachable you'll find it there (skipping straight to the details
+   screen, and a one-time admin username/password if this is the
+   device's first-ever setup -- see "Security" below), otherwise the Pi
+   falls back to its own setup network again and you're back to step 2.
+   **If the Pi was already on a real network**, nothing about this
+   phone's own connection changes at all -- the app just shows the
+   details screen next, no reconnect needed.
+8. **Reset** removes the network the Pi last configured and switches it
+   back to fallback-AP mode live, no reboot (this sends the same
+   `/forget` request the daemon's API always had -- "Reset" is just how
+   this app labels it). Rejoin that AP and search again, same as step 2.
+   Only shown once setup has finished: resetting only makes sense once
+   there's something to reset. Local network settings aren't touched by
+   Reset and become editable again once the wizard restarts.
 9. The post-setup details screen has three collapsible sections (tap
    each to expand/collapse -- **Connectivity** starts open, the other
    two start collapsed since there's a lot to show across all three):
